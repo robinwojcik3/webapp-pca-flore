@@ -1,180 +1,176 @@
 """
-Web-app Streamlit : PCA + clustering botaniques (v6)
----------------------------------------------------
-• Reconnaît les noms saisis au format « Genre épithète » même si la base contient les auteurs.
-• Déduplication stricte côté référence et côté saisie.
-• **NOUVEAUTÉ v6 :** suppression interactive d’une espèce directement sur le nuage PCA :
-  – clic sur un point ➡ ouverture d’un modal de confirmation ➡ relance complète de l’analyse sans l’espèce.
-  – la liste des espèces exclues reste visible et peut être vidée.
+Web-app Streamlit : PCA + clustering botaniques
+Reconnaît les noms saisis au format « Genre épithète » même si la base
+contient les auteurs (« Acacia mearnsii » ↔ « Acacia mearnsii De Wild. »)
+Modifications v5:
+- Correction du problème de duplication des espèces dans les analyses et affichages.
+  Assure qu'une seule entrée de la base de référence est utilisée par espèce utilisateur unique.
+- Maintien des améliorations précédentes (centrage, colonnes pour clusters, noms utilisateur).
 """
-from __future__ import annotations
 
-# --------------------------------------------------------------------------- #
-# Imports
-# --------------------------------------------------------------------------- #
-import numpy as np
+import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.figure_factory as ff
 import plotly.graph_objects as go
-import streamlit as st
 from scipy.cluster.hierarchy import linkage
 from scipy.spatial import ConvexHull
-from streamlit_plotly_events import plotly_events  # ← capture des clics Plotly
+import numpy as np
 
-import core  # Assurez-vous que core.py est accessible
+# Assurez-vous que le fichier core.py est dans le même répertoire ou accessible
+import core
 
-# --------------------------------------------------------------------------- #
-# Configuration UI
-# --------------------------------------------------------------------------- #
+# ---------------------------------------------------------------------------- #
+# CONFIGURATION UI
+# ---------------------------------------------------------------------------- #
 st.set_page_config(page_title="PCA flore interactive", layout="wide")
-st.markdown(
-    "<h1 style='text-align: center;'>Analyse interactive des clusters botaniques</h1>",
-    unsafe_allow_html=True,
-)
+st.markdown("<h1 style='text-align: center;'>Analyse interactive des clusters botaniques</h1>", unsafe_allow_html=True)
 
-# --------------------------------------------------------------------------- #
-# États persistants Streamlit
-# --------------------------------------------------------------------------- #
-st.session_state.setdefault("removed_species", set())  # noms bruts exclus
-st.session_state.setdefault("pending_delete", None)    # candidat à suppression
-
-# --------------------------------------------------------------------------- #
-# Chargement de la base
-# --------------------------------------------------------------------------- #
+# ---------------------------------------------------------------------------- #
+# CHARGEMENT DE LA BASE
+# ---------------------------------------------------------------------------- #
 @st.cache_data
-def load_data(file_path: str = "data_ref.csv") -> pd.DataFrame:
-    """Charge les données de référence à partir du chemin fourni."""
+def load_data(file_path="data_ref.csv"):
+    """Charge les données de référence à partir du chemin spécifié."""
     try:
-        return core.read_reference(file_path)
+        data = core.read_reference(file_path)
+        return data
     except FileNotFoundError:
-        st.error(
-            f"ERREUR CRITIQUE : Fichier de données '{file_path}' non trouvé. L'application ne peut pas fonctionner."
-        )
+        st.error(f"ERREUR CRITIQUE: Fichier de données '{file_path}' non trouvé. L'application ne peut pas fonctionner.")
         return pd.DataFrame()
-    except Exception as err:  # noqa: BLE001
-        st.error(
-            f"ERREUR CRITIQUE : Impossible de charger les données depuis '{file_path}' : {err}"
-        )
+    except Exception as e:
+        st.error(f"ERREUR CRITIQUE: Impossible de charger les données depuis '{file_path}': {e}")
         return pd.DataFrame()
-
 
 ref = load_data()
-ref_binom_series: pd.Series = pd.Series(dtype="str")
+
+ref_binom_series = pd.Series(dtype='str') # Renamed to avoid conflict with column name
 if not ref.empty:
     ref_binom_series = (
-        ref["Espece"].str.split().str[:2].str.join(" ").str.lower()
+        ref["Espece"]
+        .str.split()
+        .str[:2]
+        .str.join(" ")
+        .str.lower()
     )
 
-# --------------------------------------------------------------------------- #
-# Layout principal
-# --------------------------------------------------------------------------- #
+# ---------------------------------------------------------------------------- #
+# LAYOUT DE LA PAGE
+# ---------------------------------------------------------------------------- #
 col_input, col_pca_plot = st.columns([1, 3])
 
 with col_input:
     st.subheader("CORTEGE")
-
-    n_clusters_selected = st.slider(
-        "Nombre de clusters", min_value=2, max_value=8, value=3, disabled=ref.empty
-    )
-
+    n_clusters_selected = st.slider("Nombre de clusters", 2, 8, 3, key="n_clusters_slider", disabled=ref.empty)
     species_txt = st.text_area(
-        "Liste d'espèces (une par ligne)",
-        height=250,
+        "Liste d'espèces (une par ligne)", height=250,
         placeholder="Teucrium chamaedrys\nPotentilla verna\nAstragalus monspessulanus\n…",
-        disabled=ref.empty,
+        disabled=ref.empty
     )
-
-    # Parsing + exclusion interactive
-    species_raw_unique = sorted({s.strip() for s in species_txt.splitlines() if s.strip()})
-    species_raw_unique = [
-        s for s in species_raw_unique if s not in st.session_state["removed_species"]
-    ]
+    species_raw = [s.strip() for s in species_txt.splitlines() if s.strip()]
+    # Conserver les noms uniques saisis par l'utilisateur pour éviter les doublons dès l'entrée si jamais il y en avait
+    species_raw_unique = sorted(list(set(s.strip() for s in species_txt.splitlines() if s.strip())))
     species_binom_user_unique = [" ".join(s.split()[:2]).lower() for s in species_raw_unique]
 
-    if st.session_state["removed_species"]:
-        st.info(
-            "Espèces exclues actuellement : "
-            + ", ".join(sorted(st.session_state["removed_species"]))
-        )
-        if st.button("Ré-initialiser la liste exclue"):
-            st.session_state["removed_species"].clear()
-            st.experimental_rerun()
 
     run = st.button("Lancer l'analyse", type="primary", disabled=ref.empty)
 
-# Variables globales d'affichage
-fig_pca: go.Figure | None = None
-fig_dend: go.Figure | None = None
+fig_pca = None
+fig_dend = None
 vip_styled = None
-cluster_compositions: list[dict[str, object]] = []
+cluster_compositions_data = []
 
-# --------------------------------------------------------------------------- #
-# Analyse (déclenchée par le bouton)
-# --------------------------------------------------------------------------- #
+# ---------------------------------------------------------------------------- #
+# ANALYSE (déclenchée par le bouton)
+# ---------------------------------------------------------------------------- #
 if run and not ref.empty:
-    # -- Contrôles préalables -------------------------------------------------
-    if not species_binom_user_unique:
-        st.error("Veuillez saisir au moins un nom d'espèce (hors exclusions).")
+    if not species_binom_user_unique: # Utiliser la liste unique d'espèces utilisateur
+        st.error("Veuillez saisir au moins un nom d'espèce.")
         st.stop()
 
-    # -- Déduplication côté référence ----------------------------------------
-    indices_ref: list[int] = []
+    # Logique de déduplication pour la création de 'sub'
+    # Pour chaque espèce unique normalisée fournie par l'utilisateur,
+    # nous prenons la première occurrence correspondante dans la base de référence 'ref'.
+    
+    indices_to_keep_from_ref = []
     if not ref_binom_series.empty:
-        tmp = ref_binom_series.reset_index(names="idx").to_frame("binom")
-        for b in species_binom_user_unique:
-            matches = tmp[tmp["binom"] == b]
-            if not matches.empty:
-                indices_ref.append(matches["idx"].iloc[0])
+        # Crée un DataFrame temporaire pour faciliter la recherche d'index
+        # Garde l'index original de 'ref'
+        ref_indexed_binom = ref_binom_series.reset_index()
+        ref_indexed_binom.columns = ['Original_Ref_Index', 'ref_binom_val']
 
-    sub = ref.loc[indices_ref].copy() if indices_ref else pd.DataFrame(columns=ref.columns)
+        for user_binom_specie in species_binom_user_unique:
+            # Trouve toutes les correspondances dans la base de référence pour cette espèce utilisateur
+            matches_in_ref = ref_indexed_binom[ref_indexed_binom['ref_binom_val'] == user_binom_specie]
+            if not matches_in_ref.empty:
+                # Prend l'index de la première correspondance uniquement
+                indices_to_keep_from_ref.append(matches_in_ref['Original_Ref_Index'].iloc[0])
+    
+    if indices_to_keep_from_ref:
+        sub = ref.loc[indices_to_keep_from_ref].copy()
+    else:
+        sub = pd.DataFrame(columns=ref.columns) # DataFrame vide si aucune correspondance
 
-    # Espèces non trouvées ----------------------------------------------------
-    found_binoms = (
-        sub["Espece"].str.split().str[:2].str.join(" ").str.lower().tolist()
-        if not sub.empty
-        else []
-    )
-    not_found = [
-        species_raw_unique[i]
-        for i, b in enumerate(species_binom_user_unique)
-        if b not in found_binoms
-    ]
-    if not_found:
-        with col_input:
-            st.warning("Non trouvées dans la base : " + ", ".join(not_found), icon="⚠️")
-
-    # Vérifications ­---------------------------------------------------------
-    if sub.empty:
-        st.error("Aucune espèce utilisable après déduplication.")
-        st.stop()
-    if sub.shape[0] < n_clusters_selected:
-        st.error(
-            f"{sub.shape[0]} espèce(s) unique(s) trouvée(s) < nombre de clusters demandé ({n_clusters_selected})."
+    # Vérification des espèces non trouvées
+    # species_raw_unique et species_binom_user_unique sont de même longueur et alignés
+    found_ref_binom_values_in_sub = []
+    if not sub.empty:
+        found_ref_binom_values_in_sub = (
+            sub["Espece"]
+            .str.split()
+            .str[:2]
+            .str.join(" ")
+            .str.lower()
+            .tolist()
         )
-        st.stop()
-    if sub.shape[0] < 2:
-        st.error("Au moins 2 espèces uniques sont nécessaires pour l'analyse PCA.")
+
+    not_found_user_raw_names = []
+    for i, user_binom_name in enumerate(species_binom_user_unique):
+        if user_binom_name not in found_ref_binom_values_in_sub:
+            not_found_user_raw_names.append(species_raw_unique[i])
+            
+    if not_found_user_raw_names:
+        with col_input:
+            st.warning(
+                "Non trouvées dans la base : " + ", ".join(not_found_user_raw_names),
+                icon="⚠️"
+            )
+
+    if sub.empty: # Si après filtrage et avertissement, sub est vide
+        st.error("Aucune des espèces saisies (après déduplication et recherche) n'a pu être utilisée pour l'analyse.")
         st.stop()
 
-    # Mapping Raw ↔ Ref -------------------------------------------------------
-    map_raw_by_binom = {
-        " ".join(s.split()[:2]).lower(): s for s in species_raw_unique
+
+    if sub.shape[0] < n_clusters_selected:
+        st.error(f"Le nombre d'espèces uniques trouvées et utilisées ({sub.shape[0]}) est inférieur au nombre de clusters demandé ({n_clusters_selected}).")
+        st.stop()
+    
+    if sub.shape[0] < 2:
+        st.error(f"Au moins 2 espèces uniques sont nécessaires pour l'analyse PCA. {sub.shape[0]} espèce(s) trouvée(s) et utilisée(s).")
+        st.stop()
+    
+    min_points_for_hull = 3
+    
+    # Mappage des noms binomiaux de 'sub' (qui sont maintenant uniques) vers les noms bruts saisis par l'utilisateur
+    user_input_binom_to_raw_map = {
+        " ".join(s_raw.split()[:2]).lower(): s_raw for s_raw in species_raw_unique
     }
 
-    # -- Analyse principale ---------------------------------------------------
     try:
         labels, pca, coords, X = core.analyse(sub, n_clusters_selected)
 
-        pdf = pd.DataFrame(coords, columns=[f"PC{i + 1}" for i in range(coords.shape[1])])
+        pdf = pd.DataFrame(coords, columns=[f"PC{i+1}" for i in range(coords.shape[1])])
         pdf["Cluster"] = labels.astype(str)
         pdf["Espece_Ref"] = sub["Espece"].values
-        pdf["Espece_User"] = pdf["Espece_Ref"].apply(
-            lambda full: map_raw_by_binom.get(" ".join(full.split()[:2]).lower(), full)
-        )
 
-        # -- Nuage PCA --------------------------------------------------------
-        color_seq = px.colors.qualitative.Plotly
+        def get_user_input_name(full_ref_name):
+            binom_ref_name = " ".join(full_ref_name.split()[:2]).lower()
+            return user_input_binom_to_raw_map.get(binom_ref_name, full_ref_name)
+
+        pdf["Espece_User"] = pdf["Espece_Ref"].apply(get_user_input_name)
+
+        color_sequence = px.colors.qualitative.Plotly 
+        
         fig_pca = px.scatter(
             pdf,
             x="PC1",
@@ -183,135 +179,119 @@ if run and not ref.empty:
             text="Espece_User",
             template="plotly_dark",
             height=600,
-            color_discrete_sequence=color_seq,
+            color_discrete_sequence=color_sequence
         )
+
         fig_pca.update_traces(
             textposition="top center",
-            marker=dict(opacity=0.75, size=10),
-            hovertemplate="<b>%{text}</b><extra></extra>",
+            marker=dict(opacity=0.7),
+            hovertemplate="<b>%{text}</b><extra></extra>"
         )
+        
+        unique_clusters = sorted(pdf["Cluster"].unique())
+        cluster_color_map = {cluster_label: color_sequence[i % len(color_sequence)] for i, cluster_label in enumerate(unique_clusters)}
 
-        # Enveloppes convexes (si 2D) ---------------------------------------
         if coords.shape[1] > 1:
-            color_map = {
-                c: color_seq[i % len(color_seq)] for i, c in enumerate(sorted(pdf["Cluster"].unique()))
-            }
-            for c in sorted(pdf["Cluster"].unique()):
-                pts = pdf[pdf["Cluster"] == c][["PC1", "PC2"]].drop_duplicates().values
-                if pts.shape[0] >= 3:
-                    hull = ConvexHull(pts)
-                    hpts = pts[hull.vertices]
-                    fig_pca.add_trace(
-                        go.Scatter(
-                            x=np.append(hpts[:, 0], hpts[0, 0]),
-                            y=np.append(hpts[:, 1], hpts[0, 1]),
-                            mode="lines",
+            for i, cluster_label in enumerate(unique_clusters):
+                cluster_points_df = pdf[pdf["Cluster"] == cluster_label]
+                # S'assurer qu'il n'y a pas de doublons de points pour l'enveloppe convexe
+                # Normalement, pdf devrait déjà être unique par Espece_User à ce stade grâce à la déduplication de sub
+                unique_cluster_points = cluster_points_df[["PC1", "PC2"]].drop_duplicates().values
+                
+                if len(unique_cluster_points) >= min_points_for_hull:
+                    try:
+                        hull = ConvexHull(unique_cluster_points)
+                        hull_points = unique_cluster_points[hull.vertices]
+                        path_x = np.append(hull_points[:, 0], hull_points[0, 0])
+                        path_y = np.append(hull_points[:, 1], hull_points[0, 1])
+
+                        fig_pca.add_trace(go.Scatter(
+                            x=path_x,
+                            y=path_y,
                             fill="toself",
-                            line=dict(color=color_map[c], width=1.2),
-                            fillcolor=color_map[c],
+                            fillcolor=cluster_color_map[cluster_label],
+                            line=dict(color=cluster_color_map[cluster_label], width=1.5),
+                            mode='lines',
+                            name=f'Cluster {cluster_label} Hull',
                             opacity=0.2,
                             showlegend=False,
-                            hoverinfo="skip",
-                        )
-                    )
-        fig_pca.update_layout(title_text="Clusters d'espèces (PCA)", title_x=0.5)
+                            hoverinfo='skip'
+                        ))
+                    except Exception as e_hull:
+                        print(f"Could not generate convex hull for cluster {cluster_label}: {e_hull}")
+                elif len(unique_cluster_points) > 0:
+                     print(f"Cluster {cluster_label} has less than {min_points_for_hull} points ({len(unique_cluster_points)} unique), skipping hull.")
 
-        # -- Dendrogramme -----------------------------------------------------
-        fig_dend = None
-        if X.shape[0] > 1:
+        fig_pca.update_layout(
+            title_text="Clusters d'espèces (PCA)",
+            title_x=0.5,
+            legend_title_text='Cluster'
+        )
+
+        if X.shape[0] > 1: # X est basé sur sub, qui est maintenant dédupliqué
             Z = linkage(X, method="ward")
-            thr = Z[-(n_clusters_selected - 1), 2] * 0.99 if n_clusters_selected > 1 else 0
+            dynamic_color_threshold = 0
+            if n_clusters_selected > 1 and (n_clusters_selected -1) <= Z.shape[0] :
+                idx_threshold = -(n_clusters_selected - 1)
+                if idx_threshold == 0: 
+                    dynamic_color_threshold = Z[0, 2] / 2 
+                elif Z.shape[0] >= (n_clusters_selected -1) and (n_clusters_selected -1) > 0:
+                     dynamic_color_threshold = Z[-(n_clusters_selected-1), 2] * 0.99 
+
             fig_dend = ff.create_dendrogram(
-                X,
+                X, # X devrait correspondre aux lignes de pdf
                 orientation="left",
-                labels=pdf["Espece_User"].tolist(),
+                labels=pdf["Espece_User"].tolist(), # Assurez-vous que l'ordre correspond à X
                 linkagefun=lambda _: Z,
-                color_threshold=thr,
-                colorscale=color_seq,
+                color_threshold=dynamic_color_threshold if n_clusters_selected > 1 else 0,
+                colorscale=color_sequence
             )
             fig_dend.update_layout(
                 template="plotly_dark",
-                height=max(650, sub.shape[0] * 20),
+                height=max(650, sub.shape[0] * 20), # sub.shape[0] est maintenant le nombre d'espèces uniques
                 title_text="Dendrogramme",
-                title_x=0.5,
+                title_x=0.5
             )
+        else:
+            fig_dend = None
 
-        # -- VIP --------------------------------------------------------------
         loadings = pca.components_.T * (pca.explained_variance_ ** 0.5)
         communal = (loadings**2).sum(axis=1)
-        vip_df = (
-            pd.DataFrame(
-                {
-                    "Variable": sub.columns[1:],
-                    "Communalité (%)": (communal * 100).round(0).astype(int),
-                }
-            )
-            .sort_values("Communalité (%)", ascending=False)
-            .reset_index(drop=True)
-        )
-        vip_styled = vip_df.style.set_properties(
-            **{"text-align": "center"}
-        ).format({"Communalité (%)": "{:}%"})
+        vip_data_df = pd.DataFrame({
+            "Variable": sub.columns[1:], # Les colonnes de 'sub' (traits)
+            "Communalité (%)": (communal * 100).round(0).astype(int),
+        }).sort_values("Communalité (%)", ascending=False).reset_index(drop=True)
+        
+        vip_styled = vip_data_df.style.set_properties(**{'text-align': 'center'}, subset=['Communalité (%)'])\
+                                   .format({"Communalité (%)": "{:}%"})
 
-        # -- Composition des clusters ----------------------------------------
-        cluster_compositions = [
-            {
-                "cluster_label": c,
-                "count": len(pdf.loc[pdf["Cluster"] == c, "Espece_User"].unique()),
-                "species_list": sorted(pdf.loc[pdf["Cluster"] == c, "Espece_User"].unique()),
-            }
-            for c in sorted(pdf["Cluster"].unique())
-        ]
+        cluster_compositions_data = []
+        for c_label in sorted(pdf["Cluster"].unique()):
+            # pdf["Espece_User"] devrait maintenant être unique par cluster grâce à la déduplication de sub
+            esp_user_names = sorted(list(pdf.loc[pdf["Cluster"] == c_label, "Espece_User"].unique()))
+            cluster_compositions_data.append({
+                "cluster_label": c_label,
+                "count": len(esp_user_names),
+                "species_list": esp_user_names
+            })
 
-    except Exception as err:  # noqa: BLE001
-        st.error(f"Une erreur est survenue lors de l'analyse : {err}")
-        st.exception(err)
+    except Exception as e:
+        st.error(f"Une erreur est survenue lors de l'analyse : {e}")
+        st.exception(e) 
         st.stop()
 
-# --------------------------------------------------------------------------- #
-# Affichage interactif & capture des clics
-# --------------------------------------------------------------------------- #
+# Affichage des résultats
 with col_pca_plot:
     if fig_pca:
-        click_data = plotly_events(
-            fig_pca,
-            click_event=True,
-            hover_event=False,
-            override_height=600,
-            override_width="100%",
-        )
-        # clic ⇒ ouverture du modal de confirmation --------------------------
-        if click_data:
-            sp_clicked = click_data[0].get("text")  # texte du point (Espece_User)
-            if sp_clicked:
-                st.session_state["pending_delete"] = sp_clicked
-                st.experimental_rerun()
+        st.plotly_chart(fig_pca, use_container_width=True)
     elif run and ref.empty:
-        st.warning("Veuillez charger des données pour afficher le graphique PCA.")
+        st.warning("Veuillez d'abord charger des données pour afficher le graphique PCA.")
     elif run and not species_binom_user_unique:
-        pass
+        pass 
     elif run:
         st.info("Le graphique PCA sera affiché ici après une analyse réussie.")
 
-# -- Modal de confirmation ---------------------------------------------------
-if st.session_state["pending_delete"]:
-    sp = st.session_state["pending_delete"]
-    with st.modal("Supprimer l'espèce ?"):
-        st.write(f"Supprimer définitivement **{sp}** de l'analyse ?")
-        col_yes, col_no = st.columns(2)
-        with col_yes:
-            if st.button("Oui, supprimer", key="confirm_del"):
-                st.session_state["removed_species"].add(sp)
-                st.session_state["pending_delete"] = None
-                st.experimental_rerun()
-        with col_no:
-            if st.button("Annuler", key="cancel_del"):
-                st.session_state["pending_delete"] = None
-
-# --------------------------------------------------------------------------- #
-# Reste des affichages (variables, clusters, dendro)
-# --------------------------------------------------------------------------- #
-col_vars, col_comp = st.columns([1, 2])
+col_vars, col_cluster_comp_container = st.columns([1, 2])
 
 with col_vars:
     st.subheader("Importance des Variables")
@@ -320,25 +300,31 @@ with col_vars:
     elif run:
         st.info("Le tableau d'importance des variables sera affiché ici.")
 
-with col_comp:
+with col_cluster_comp_container:
     st.subheader("Composition des Clusters")
-    if cluster_compositions:
-        cols = st.columns(len(cluster_compositions))
-        for col, comp in zip(cols, cluster_compositions):
-            with col:
-                st.markdown(f"**Cluster {comp['cluster_label']}** ({comp['count']} espèces)")
-                for sp in comp["species_list"]:
-                    st.markdown(f"- {sp}")
+    if cluster_compositions_data:
+        num_clusters_found = len(cluster_compositions_data)
+        if num_clusters_found > 0:
+            cluster_cols = st.columns(num_clusters_found)
+            for i, comp_data in enumerate(cluster_compositions_data):
+                with cluster_cols[i]:
+                    st.markdown(f"**Cluster {comp_data['cluster_label']}** ({comp_data['count']} espèces)")
+                    for species_name in comp_data['species_list']:
+                        st.markdown(f"- {species_name}")
+        else:
+            st.info("Aucun cluster à afficher.")
     elif run:
         st.info("La composition des clusters sera affichée ici.")
 
 if fig_dend:
     st.plotly_chart(fig_dend, use_container_width=True)
 elif run and not ref.empty and species_binom_user_unique:
-    st.info("Le dendrogramme n'a pas pu être généré (≥2 espèces uniques requises).")
+    st.info("Le dendrogramme n'a pas pu être généré (nécessite au moins 2 espèces uniques ou problème de seuil).")
 elif run and ref.empty:
-    st.warning("Veuillez charger des données pour afficher le dendrogramme.")
+    st.warning("Veuillez d'abord charger des données pour afficher le dendrogramme.")
 
 if not run and not ref.empty:
     with col_pca_plot:
         st.info("Prêt à lancer l'analyse. Configurez les options à gauche et cliquez sur 'Lancer l'analyse'.")
+elif not run and ref.empty:
+    pass
