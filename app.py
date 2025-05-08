@@ -45,41 +45,44 @@ if not ref.empty:
     )
 
 # ---------------------------------------------------------------------------- #
-# NOUVEAU: CHARGEMENT DE LA BASE ECOLOGIQUE
+# NOUVEAU: CHARGEMENT DE LA BASE ECOLOGIQUE (MODIFIÉ)
 # ---------------------------------------------------------------------------- #
 @st.cache_data
 def load_ecology_data(file_path="data_ecologie_espece.csv"):
     """Charge les données écologiques à partir du chemin spécifié."""
     try:
-        # Tente de lire les deux premières colonnes.
-        # S'attend à ce que la première colonne soit le nom de l'espèce et la seconde la description.
-        eco_data = pd.read_csv(file_path, usecols=[0, 1], encoding='utf-8') # Spécifiez l'encodage si nécessaire
-        eco_data.columns = ['Espece', 'Description_Ecologie']  # Assigne des noms de colonnes standards
+        # MODIFIÉ: Utilisation de sep='\t' pour les fichiers TSV (Tab Separated Values)
+        # MODIFIÉ: Ajout de header=None car le fichier semble ne pas avoir d'en-tête
+        # MODIFIÉ: Assignation explicite des noms de colonnes
+        eco_data = pd.read_csv(file_path, sep='\t', header=None, usecols=[0, 1], names=['Espece', 'Description_Ecologie'], encoding='utf-8')
         
         # Normalise les noms d'espèces: deux premiers mots, minuscules
         eco_data['Espece_norm'] = (
             eco_data['Espece']
-            .astype(str)
+            .astype(str) # S'assurer que c'est une chaîne
             .str.split()
             .str[:2]
             .str.join(" ")
             .str.lower()
         )
-        # Définit le nom normalisé comme index pour une recherche facile
+        # Vérifier s'il y a des doublons dans Espece_norm et les gérer si nécessaire
+        # Pour cet exemple, nous gardons la première occurrence en cas de doublons après normalisation.
+        eco_data = eco_data.drop_duplicates(subset=['Espece_norm'], keep='first')
         eco_data = eco_data.set_index('Espece_norm')
+        
         # Retourne uniquement la colonne de description, indexée par le nom normalisé
         return eco_data[["Description_Ecologie"]]
     except FileNotFoundError:
         st.warning(f"Fichier de données écologiques '{file_path}' non trouvé. Les descriptions écologiques ne seront pas disponibles.")
         return pd.DataFrame()
-    except ValueError:
-        st.warning(f"Le fichier '{file_path}' ne semble pas avoir deux colonnes ou n'est pas un CSV valide. Les descriptions écologiques ne seront pas disponibles.")
+    except ValueError as ve:
+        st.warning(f"Erreur de valeur lors de la lecture du fichier '{file_path}'. Vérifiez que le fichier a bien deux colonnes et est au format TSV attendu. Détails: {ve}. Les descriptions écologiques ne seront pas disponibles.")
         return pd.DataFrame()
     except Exception as e:
         st.warning(f"Impossible de charger les données écologiques depuis '{file_path}': {e}. Les descriptions écologiques ne seront pas disponibles.")
         return pd.DataFrame()
 
-ecology_df = load_ecology_data() # Charger les données écologiques
+ecology_df = load_ecology_data()
 
 # ---------------------------------------------------------------------------- #
 # LAYOUT DE LA PAGE
@@ -171,67 +174,60 @@ if run and not ref.empty:
 
         pdf = pd.DataFrame(coords, columns=[f"PC{i+1}" for i in range(coords.shape[1])])
         pdf["Cluster"] = labels.astype(str)
-        pdf["Espece_Ref"] = sub["Espece"].values # Nom de l'espèce tel qu'il est dans la base de référence (peut inclure auteur)
+        pdf["Espece_Ref"] = sub["Espece"].values 
 
         def get_user_input_name(full_ref_name):
             binom_ref_name = " ".join(full_ref_name.split()[:2]).lower()
             return user_input_binom_to_raw_map.get(binom_ref_name, full_ref_name)
-        pdf["Espece_User"] = pdf["Espece_Ref"].apply(get_user_input_name) # Nom tel que saisi par l'utilisateur (ou le plus proche)
+        pdf["Espece_User"] = pdf["Espece_Ref"].apply(get_user_input_name)
 
-        # NOUVEAU: Ajout des données écologiques à pdf
         if not ecology_df.empty:
-            # Normaliser Espece_Ref de pdf pour correspondre à l'index de ecology_df
             pdf['Espece_Ref_norm_for_eco'] = (
-                pdf['Espece_Ref'] # Utiliser Espece_Ref car c'est le nom complet de la base
+                pdf['Espece_Ref']
                 .astype(str)
                 .str.split()
                 .str[:2]
                 .str.join(" ")
                 .str.lower()
             )
-            # Joindre (map) les descriptions écologiques
             pdf['Ecologie'] = pdf['Espece_Ref_norm_for_eco'].map(ecology_df['Description_Ecologie'])
             pdf['Ecologie'] = pdf['Ecologie'].fillna("Description écologique non disponible.")
-            # Supprimer la colonne temporaire de normalisation si elle n'est plus nécessaire
+            # Optionnel: supprimer la colonne temporaire
             # pdf = pdf.drop(columns=['Espece_Ref_norm_for_eco']) 
         else:
             pdf['Ecologie'] = "Description écologique non disponible (fichier non chargé ou vide)."
 
         color_sequence = px.colors.qualitative.Plotly 
         
-        # MODIFIÉ: Ajout de hover_name et custom_data pour l'affichage de l'écologie
+        # MODIFIÉ: custom_data pour l'affichage de l'écologie
         fig_pca = px.scatter(
             pdf,
             x="PC1",
             y="PC2" if coords.shape[1] > 1 else None,
             color="Cluster",
-            text="Espece_User", # Texte affiché sur les points
-            hover_name="Espece_User", # Nom principal affiché en gras dans le tooltip
-            custom_data=["Espece_User", "Ecologie", "Cluster"], # Données supplémentaires pour le hovertemplate
+            text="Espece_User", 
+            hover_name="Espece_User", 
+            custom_data=["Espece_User", "Ecologie"], # MODIFIÉ: Seulement Espece_User et Ecologie
             template="plotly_dark",
             height=600,
             color_discrete_sequence=color_sequence
         )
 
-        # MODIFIÉ: Mise à jour de hovertemplate pour inclure l'écologie
+        # MODIFIÉ: Mise à jour de hovertemplate pour inclure uniquement l'espèce et l'écologie
         fig_pca.update_traces(
             textposition="top center",
             marker=dict(opacity=0.7),
             hovertemplate=(
-                "<b>%{customdata[0]}</b><br><br>" + # Espece_User
-                "Cluster: %{customdata[2]}<br>" +   # Numéro de Cluster
-                "PC1: %{x:.2f}<br>" +
-                "PC2: %{y:.2f}<br>" +
-                "--------------------<br>" +
-                "<i>Écologie:</i><br>%{customdata[1]}" + # Description écologique
-                "<extra></extra>" # Masque les informations de trace par défaut
+                "<b>%{customdata[0]}</b><br>" + # Espece_User
+                "<br><i>Écologie:</i><br>%{customdata[1]}" + # Description écologique
+                "<extra></extra>" 
             )
         )
         
         unique_clusters = sorted(pdf["Cluster"].unique())
         cluster_color_map = {cluster_label: color_sequence[i % len(color_sequence)] for i, cluster_label in enumerate(unique_clusters)}
 
-        if coords.shape[1] > 1: # Pour les enveloppes convexes
+        if coords.shape[1] > 1: 
             for i, cluster_label in enumerate(unique_clusters):
                 cluster_points_df = pdf[pdf["Cluster"] == cluster_label]
                 unique_cluster_points = cluster_points_df[["PC1", "PC2"]].drop_duplicates().values
@@ -256,7 +252,7 @@ if run and not ref.empty:
                             hoverinfo='skip'
                         ))
                     except Exception as e_hull:
-                        st.sidebar.warning(f"Impossible de générer l'enveloppe convexe pour le cluster {cluster_label}: {e_hull}") # Affichage discret
+                        st.sidebar.warning(f"Impossible de générer l'enveloppe convexe pour le cluster {cluster_label}: {e_hull}")
                 elif len(unique_cluster_points) > 0:
                      st.sidebar.info(f"Cluster {cluster_label}: pas assez de points uniques ({len(unique_cluster_points)}) pour l'enveloppe (min {min_points_for_hull}).")
 
@@ -343,19 +339,15 @@ with col_cluster_comp_container:
     if cluster_compositions_data:
         num_clusters_found = len(cluster_compositions_data)
         if num_clusters_found > 0:
-            # S'assurer que le nombre de colonnes ne dépasse pas un maximum raisonnable (par ex. 4)
-            # ou le nombre de clusters trouvés si inférieur.
             num_display_cols = min(num_clusters_found, 4) 
             cluster_cols = st.columns(num_display_cols)
             for i, comp_data in enumerate(cluster_compositions_data):
-                # Distribuer les clusters dans les colonnes disponibles
                 with cluster_cols[i % num_display_cols]: 
                     st.markdown(f"**Cluster {comp_data['cluster_label']}** ({comp_data['count']} espèces)")
                     for species_name in comp_data['species_list']:
                         st.markdown(f"- {species_name}")
-                    # Ajouter un séparateur ou de l'espace si plusieurs clusters sont dans la même colonne streamlit
                     if i // num_display_cols < (num_clusters_found -1) // num_display_cols and (i+1) % num_display_cols == 0 :
-                         st.markdown("---") # Séparateur horizontal
+                         st.markdown("---") 
         else:
             st.info("Aucun cluster à afficher.")
     elif run:
