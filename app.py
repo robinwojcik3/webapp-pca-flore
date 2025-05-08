@@ -18,8 +18,11 @@ st.set_page_config(page_title="PCA flore interactive", layout="wide")
 st.markdown("<h1 style='text-align: center;'>Analyse interactive des clusters botaniques</h1>", unsafe_allow_html=True)
 
 # ---------------------------------------------------------------------------- #
-# CHARGEMENT DE LA BASE DE TRAITS
+# CONSTANTES ET CHARGEMENT DE DONNÉES INITIALES
 # ---------------------------------------------------------------------------- #
+MIN_POINTS_FOR_HULL = 3 # MODIFIÉ: Défini globalement
+COLOR_SEQUENCE = px.colors.qualitative.Plotly # Défini globalement
+
 @st.cache_data
 def load_data(file_path="data_ref.csv"):
     """Charge les données de référence (traits) à partir du chemin spécifié."""
@@ -100,13 +103,13 @@ def load_ecology_data(file_path="data_ecologie_espece.csv"):
 ecology_df = load_ecology_data()
 
 # ---------------------------------------------------------------------------- #
-# INITIALISATION DES ETATS DE SESSION (pour l'exploration interactive)
+# INITIALISATION DES ETATS DE SESSION
 # ---------------------------------------------------------------------------- #
 if 'x_axis_trait_interactive' not in st.session_state:
     st.session_state.x_axis_trait_interactive = None
 if 'y_axis_trait_interactive' not in st.session_state:
     st.session_state.y_axis_trait_interactive = None
-if 'run_main_analysis_once' not in st.session_state: # Pour savoir si l'analyse principale a déjà tourné
+if 'run_main_analysis_once' not in st.session_state: 
     st.session_state.run_main_analysis_once = False
 
 
@@ -128,7 +131,7 @@ with col_input:
 
     run_main_analysis_button = st.button("Lancer l'analyse principale", type="primary", disabled=ref.empty, key="main_analysis_button")
 
-# Initialisation des DataFrames en dehors des blocs conditionnels pour qu'ils aient une portée globale dans le script
+# Initialisation des variables pour les figures et données
 fig_pca = None
 fig_dend = None
 vip_styled = None
@@ -136,13 +139,13 @@ vip_data_df = pd.DataFrame()
 cluster_compositions_data = []
 sub = pd.DataFrame() 
 pdf = pd.DataFrame() 
-color_sequence = px.colors.qualitative.Plotly # Défini globalement pour être accessible partout
+# color_sequence est déjà défini globalement comme COLOR_SEQUENCE
 
 # ---------------------------------------------------------------------------- #
-# ANALYSE PRINCIPALE (déclenchée par le bouton "Lancer l'analyse principale")
+# ANALYSE PRINCIPALE
 # ---------------------------------------------------------------------------- #
 if run_main_analysis_button and not ref.empty:
-    st.session_state.run_main_analysis_once = True # Marquer que l'analyse principale a tourné
+    st.session_state.run_main_analysis_once = True 
     if not species_binom_user_unique:
         st.error("Veuillez saisir au moins un nom d'espèce.")
         st.stop()
@@ -157,12 +160,11 @@ if run_main_analysis_button and not ref.empty:
                 indices_to_keep_from_ref.append(matches_in_ref['Original_Ref_Index'].iloc[0])
     
     if indices_to_keep_from_ref:
-        # Stocker sub dans st.session_state pour persistance
         st.session_state.sub = ref.loc[indices_to_keep_from_ref].copy() 
     else:
         st.session_state.sub = pd.DataFrame(columns=ref.columns) 
 
-    sub = st.session_state.sub # Récupérer sub de session_state
+    sub = st.session_state.sub 
 
     found_ref_binom_values_in_sub = []
     if not sub.empty:
@@ -189,7 +191,7 @@ if run_main_analysis_button and not ref.empty:
 
     if sub.empty:
         st.error("Aucune des espèces saisies (après déduplication et recherche dans la base de traits) n'a pu être utilisée pour l'analyse.")
-        st.session_state.run_main_analysis_once = False # Réinitialiser si l'analyse échoue tôt
+        st.session_state.run_main_analysis_once = False 
         st.stop()
 
     if sub.shape[0] < n_clusters_selected and n_clusters_selected > 0 :
@@ -202,7 +204,6 @@ if run_main_analysis_button and not ref.empty:
         st.session_state.run_main_analysis_once = False
         st.stop()
     
-    min_points_for_hull = 3 # Défini ici pour être utilisé plus tard
     user_input_binom_to_raw_map = {
         " ".join(s_raw.split()[:2]).lower(): s_raw for s_raw in species_raw_unique
     }
@@ -210,7 +211,6 @@ if run_main_analysis_button and not ref.empty:
     try:
         labels, pca, coords, X = core.analyse(sub, n_clusters_selected)
 
-        # Stocker pdf dans st.session_state
         current_pdf = pd.DataFrame(coords, columns=[f"PC{i+1}" for i in range(coords.shape[1])]) 
         current_pdf["Cluster"] = labels.astype(str)
         current_pdf["Espece_Ref"] = sub["Espece"].values 
@@ -236,19 +236,16 @@ if run_main_analysis_button and not ref.empty:
         else:
             current_pdf['Ecologie'] = format_ecology_for_hover("Description écologique non disponible (fichier non chargé ou vide).")
         
-        st.session_state.pdf = current_pdf # Stocker le pdf calculé
+        st.session_state.pdf = current_pdf 
         
-        # Calcul de vip_data_df et stockage
         loadings = pca.components_.T * (pca.explained_variance_ ** 0.5)
         communal = (loadings**2).sum(axis=1)
         st.session_state.vip_data_df = pd.DataFrame({ 
             "Variable": sub.columns[1:], "Communalité (%)": (communal * 100).round(0).astype(int),
         }).sort_values("Communalité (%)", ascending=False).reset_index(drop=True)
         
-        # Stocker X pour le dendrogramme
         st.session_state.X_for_dendro = X
 
-        # Initialiser les sélections d'axes pour l'exploration interactive après la première analyse principale
         numeric_trait_names_init = [col for col in sub.columns if col.lower() != "espece" and pd.api.types.is_numeric_dtype(sub[col])]
         if len(numeric_trait_names_init) >= 2:
             default_x_init = numeric_trait_names_init[0]
@@ -257,7 +254,7 @@ if run_main_analysis_button and not ref.empty:
                 top_vars_init = [var for var in st.session_state.vip_data_df["Variable"].tolist() if var in numeric_trait_names_init]
                 if len(top_vars_init) >= 1: default_x_init = top_vars_init[0]
                 if len(top_vars_init) >= 2: default_y_init = top_vars_init[1]
-                if default_x_init == default_y_init: # S'assurer qu'ils sont différents
+                if default_x_init == default_y_init: 
                     available_defaults_y_init = [t for t in numeric_trait_names_init if t != default_x_init]
                     if available_defaults_y_init: default_y_init = available_defaults_y_init[0]
             st.session_state.x_axis_trait_interactive = default_x_init
@@ -266,11 +263,10 @@ if run_main_analysis_button and not ref.empty:
             st.session_state.x_axis_trait_interactive = numeric_trait_names_init[0]
             st.session_state.y_axis_trait_interactive = numeric_trait_names_init[0]
 
-
     except Exception as e:
         st.error(f"Une erreur est survenue lors de l'analyse ACP : {e}")
         st.exception(e) 
-        st.session_state.run_main_analysis_once = False # Réinitialiser en cas d'erreur
+        st.session_state.run_main_analysis_once = False 
         st.stop()
 
 # Récupérer les DataFrames de st.session_state si l'analyse principale a déjà tourné
@@ -280,27 +276,27 @@ if st.session_state.run_main_analysis_once:
     vip_data_df = st.session_state.get('vip_data_df', pd.DataFrame())
     X_for_dendro = st.session_state.get('X_for_dendro', np.array([]))
 
-    if not pdf.empty: # Générer les graphiques ACP etc. uniquement si pdf est disponible
-        # --- Section ACP ---
+    if not pdf.empty: 
         fig_pca = px.scatter(
-            pdf, x="PC1", y="PC2" if pdf.shape[1] > 1 and "PC2" in pdf.columns else None, # Vérifier si PC2 existe
+            pdf, x="PC1", y="PC2" if pdf.shape[1] > 1 and "PC2" in pdf.columns else None, 
             color="Cluster", text="Espece_User", hover_name="Espece_User", 
             custom_data=["Espece_User", "Ecologie"], template="plotly_dark",
-            height=600, color_discrete_sequence=color_sequence
+            height=600, color_discrete_sequence=COLOR_SEQUENCE
         )
         fig_pca.update_traces(
             textposition="top center", marker=dict(opacity=0.7),
             hovertemplate=("<b>%{customdata[0]}</b><br><br><i>Écologie:</i><br>%{customdata[1]}<extra></extra>")
         )
         unique_clusters_pca = sorted(pdf["Cluster"].unique())
-        cluster_color_map_pca = {cluster_label: color_sequence[i % len(color_sequence)] for i, cluster_label in enumerate(unique_clusters_pca)}
-        if pdf.shape[1] > 1 and "PC2" in pdf.columns: 
+        cluster_color_map_pca = {cluster_label: COLOR_SEQUENCE[i % len(COLOR_SEQUENCE)] for i, cluster_label in enumerate(unique_clusters_pca)}
+        
+        # Vérifier si PC2 existe avant de tenter de créer des enveloppes
+        if "PC2" in pdf.columns and pdf.shape[1] > 1 : 
             for i, cluster_label in enumerate(unique_clusters_pca):
                 cluster_points_df_pca = pdf[pdf["Cluster"] == cluster_label]
-                # S'assurer que PC1 et PC2 sont présents avant de tenter de créer l'enveloppe
                 if "PC1" in cluster_points_df_pca.columns and "PC2" in cluster_points_df_pca.columns:
                     unique_cluster_points_pca = cluster_points_df_pca[["PC1", "PC2"]].drop_duplicates().values
-                    if len(unique_cluster_points_pca) >= min_points_for_hull: # min_points_for_hull est défini plus haut
+                    if len(unique_cluster_points_pca) >= MIN_POINTS_FOR_HULL: # Utilisation de la constante globale
                         try:
                             hull_pca = ConvexHull(unique_cluster_points_pca)
                             hull_points_pca = unique_cluster_points_pca[hull_pca.vertices]
@@ -312,20 +308,17 @@ if st.session_state.run_main_analysis_once:
                                 name=f'Cluster {cluster_label} Hull', opacity=0.2, showlegend=False, hoverinfo='skip'
                             ))
                         except Exception as e_hull_pca: print(f"Note: Impossible de générer l'enveloppe convexe ACP pour le cluster {cluster_label}: {e_hull_pca}")
-                    elif len(unique_cluster_points_pca) > 0: print(f"Note: Cluster ACP {cluster_label}: pas assez de points uniques ({len(unique_cluster_points_pca)}) pour l'enveloppe (min {min_points_for_hull}).")
+                    elif len(unique_cluster_points_pca) > 0: print(f"Note: Cluster ACP {cluster_label}: pas assez de points uniques ({len(unique_cluster_points_pca)}) pour l'enveloppe (min {MIN_POINTS_FOR_HULL}).")
         fig_pca.update_layout(title_text="Clusters d'espèces (ACP)", title_x=0.5, legend_title_text='Cluster')
         
-        # --- VIP Styled ---
         if not vip_data_df.empty:
             vip_styled = vip_data_df.style.set_properties(**{'text-align': 'center'}, subset=['Communalité (%)']).format({"Communalité (%)": "{:}%"})
 
-        # --- Cluster Compositions ---
         cluster_compositions_data = []
         for c_label in sorted(pdf["Cluster"].unique()):
             esp_user_names = sorted(list(pdf.loc[pdf["Cluster"] == c_label, "Espece_User"].unique()))
             cluster_compositions_data.append({"cluster_label": c_label, "count": len(esp_user_names), "species_list": esp_user_names})
 
-        # --- Dendrogram ---
         if X_for_dendro.shape[0] > 1:
             Z = linkage(X_for_dendro, method="ward")
             dynamic_color_threshold = 0
@@ -335,7 +328,7 @@ if st.session_state.run_main_analysis_once:
                 elif Z.shape[0] >= (n_clusters_selected -1) and (n_clusters_selected -1) > 0: dynamic_color_threshold = Z[-(n_clusters_selected-1), 2] * 0.99 
             fig_dend = ff.create_dendrogram(
                 X_for_dendro, orientation="left", labels=pdf["Espece_User"].tolist(), linkagefun=lambda _: Z,
-                color_threshold=dynamic_color_threshold if n_clusters_selected > 1 else 0, colorscale=color_sequence
+                color_threshold=dynamic_color_threshold if n_clusters_selected > 1 else 0, colorscale=COLOR_SEQUENCE
             )
             fig_dend.update_layout(template="plotly_dark", height=max(650, sub.shape[0] * 20), title_text="Dendrogramme", title_x=0.5)
         else: fig_dend = None
@@ -347,11 +340,11 @@ if st.session_state.run_main_analysis_once:
 with col_pca_plot: 
     if fig_pca:
         st.plotly_chart(fig_pca, use_container_width=True)
-    elif run_main_analysis_button and ref.empty: # Si le bouton principal a été cliqué mais ref est vide
+    elif run_main_analysis_button and ref.empty: 
         st.warning("Veuillez d'abord charger des données de traits pour afficher le graphique ACP.")
-    elif run_main_analysis_button and sub.empty : # Si le bouton principal a été cliqué mais sub est vide après traitement
+    elif run_main_analysis_button and sub.empty : 
          st.warning("Aucune espèce valide pour l'analyse ACP.")
-    elif st.session_state.run_main_analysis_once and not fig_pca: # Si l'analyse a tourné mais fig_pca n'est pas là
+    elif st.session_state.run_main_analysis_once and not fig_pca: 
         st.info("Le graphique ACP sera affiché ici après une analyse principale réussie.")
 
 
@@ -379,11 +372,10 @@ with col_cluster_comp_main:
         st.info("La composition des clusters (ACP) sera affichée ici.")
 
 # ---------------------------------------------------------------------------- #
-# EXPLORATION INTERACTIVE DES VARIABLES (anciennement traits bruts)
+# EXPLORATION INTERACTIVE DES VARIABLES
 # ---------------------------------------------------------------------------- #
 if st.session_state.run_main_analysis_once and not sub.empty: 
     st.markdown("---")
-    # MODIFIÉ: Renommage de la section
     st.subheader("🔬 Exploration interactive des variables")
 
     potential_traits = [col for col in sub.columns if col.lower() != "espece"] 
@@ -394,13 +386,10 @@ if st.session_state.run_main_analysis_once and not sub.empty:
     if len(numeric_trait_names) >= 2:
         st.markdown("##### Sélectionnez les variables pour les axes du nuage de points :")
         
-        # Utiliser les valeurs de session_state pour les sélections d'axes
-        # Les valeurs par défaut ont été initialisées après la première analyse principale
         current_x_trait = st.session_state.get('x_axis_trait_interactive', numeric_trait_names[0])
         current_y_trait = st.session_state.get('y_axis_trait_interactive', numeric_trait_names[1])
 
-
-        col_scatter_select_x, col_scatter_select_y, col_button_update = st.columns([2,2,1]) # Ajout d'une colonne pour le bouton
+        col_scatter_select_x, col_scatter_select_y, col_button_update = st.columns([2,2,1]) 
         with col_scatter_select_x:
             x_axis_trait_selected = st.radio(
                 "Axe X:",
@@ -416,21 +405,14 @@ if st.session_state.run_main_analysis_once and not sub.empty:
                 key="interactive_y_radio"
             )
         
-        # Mettre à jour session_state si les sélections radio changent
         st.session_state.x_axis_trait_interactive = x_axis_trait_selected
         st.session_state.y_axis_trait_interactive = y_axis_trait_selected
         
         with col_button_update:
-            st.markdown("<br>", unsafe_allow_html=True) # Pour aligner verticalement le bouton
-            # NOUVEAU: Bouton d'actualisation pour cette section
+            st.markdown("<br>", unsafe_allow_html=True) 
             run_interactive_update = st.button("Actualiser l'exploration", key="update_interactive_plot_button")
-
-
-        # Le graphique est généré si le bouton est cliqué OU si les radios changent (car Streamlit re-exécute)
-        # La condition run_interactive_update est optionnelle ici car les radios provoquent déjà un re-run.
-        # Cependant, le bouton donne un contrôle explicite à l'utilisateur.
         
-        if x_axis_trait_selected and y_axis_trait_selected: # Toujours vrai avec st.radio
+        if x_axis_trait_selected and y_axis_trait_selected: 
             if not pdf.empty: 
                 if len(sub) == len(pdf):
                     plot_data_interactive = pd.DataFrame({
@@ -451,7 +433,7 @@ if st.session_state.run_main_analysis_once and not sub.empty:
                         custom_data=["Espece_User", "Ecologie", x_axis_trait_selected, y_axis_trait_selected], 
                         template="plotly_dark",
                         height=600,
-                        color_discrete_sequence=color_sequence 
+                        color_discrete_sequence=COLOR_SEQUENCE 
                     )
                     fig_interactive_scatter.update_traces(
                         textposition="top center", 
@@ -465,19 +447,17 @@ if st.session_state.run_main_analysis_once and not sub.empty:
                         )
                     )
                     
-                    # NOUVEAU: Ajout des enveloppes convexes pour l'exploration interactive
                     unique_clusters_interactive = sorted(plot_data_interactive["Cluster"].unique())
                     cluster_color_map_interactive = {
-                        cluster_label: color_sequence[i % len(color_sequence)] 
+                        cluster_label: COLOR_SEQUENCE[i % len(COLOR_SEQUENCE)] 
                         for i, cluster_label in enumerate(unique_clusters_interactive)
                     }
 
                     for cluster_label in unique_clusters_interactive:
                         cluster_points_df_interactive = plot_data_interactive[plot_data_interactive["Cluster"] == cluster_label]
-                        # Utiliser les colonnes sélectionnées pour les axes
                         points_for_hull = cluster_points_df_interactive[[x_axis_trait_selected, y_axis_trait_selected]].drop_duplicates().values
                         
-                        if len(points_for_hull) >= min_points_for_hull:
+                        if len(points_for_hull) >= MIN_POINTS_FOR_HULL: # Utilisation de la constante globale
                             try:
                                 hull_interactive = ConvexHull(points_for_hull)
                                 hull_points_interactive = points_for_hull[hull_interactive.vertices]
@@ -493,7 +473,7 @@ if st.session_state.run_main_analysis_once and not sub.empty:
                             except Exception as e_hull_interactive:
                                 print(f"Note: Impossible de générer l'enveloppe convexe interactive pour le cluster {cluster_label}: {e_hull_interactive}")
                         elif len(points_for_hull) > 0:
-                            print(f"Note: Cluster interactif {cluster_label}: pas assez de points uniques ({len(points_for_hull)}) pour l'enveloppe (min {min_points_for_hull}).")
+                            print(f"Note: Cluster interactif {cluster_label}: pas assez de points uniques ({len(points_for_hull)}) pour l'enveloppe (min {MIN_POINTS_FOR_HULL}).")
 
                     fig_interactive_scatter.update_layout(
                         title_text=f"Variables: {y_axis_trait_selected} en fonction de {x_axis_trait_selected}",
