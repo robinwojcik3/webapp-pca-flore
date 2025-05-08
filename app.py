@@ -244,7 +244,6 @@ if st.session_state.run_main_analysis_once:
                             fig_pca.add_trace(go.Scatter(x=hull_path[:, 0], y=hull_path[:, 1], fill="toself", fillcolor=clr, line=dict(color=clr, width=1.5), mode='lines', name=f'Cluster {cluster_label} Hull', opacity=0.2, showlegend=False, hoverinfo='skip'))
                         except Exception as e: print(f"Hull ACP {cluster_label}: {e}")
         fig_pca.update_layout(title_text="Clusters d'espèces (ACP)", title_x=0.5, legend_title_text='Cluster')
-        # MODIFICATION: Définir le dragmode pour le graphique PCA
         fig_pca.update_layout(dragmode='pan')
 
 
@@ -267,7 +266,8 @@ if st.session_state.run_main_analysis_once:
 # ---------------------------------------------------------------------------- #
 with col_pca_plot_container:
     if fig_pca: 
-        st.plotly_chart(fig_pca, use_container_width=True) # config={'scrollZoom': True} est généralement le défaut
+        # MODIFICATION: Ajout explicite de config pour scrollZoom
+        st.plotly_chart(fig_pca, use_container_width=True, config={'scrollZoom': True}) 
     elif run_main_analysis_button and ref.empty: st.warning("Veuillez d'abord charger des données de traits pour afficher le graphique ACP.")
     elif run_main_analysis_button and sub.empty : st.warning("Aucune espèce valide pour l'analyse ACP.")
     elif st.session_state.run_main_analysis_once and not fig_pca: st.info("Le graphique ACP sera affiché ici après une analyse principale réussie.")
@@ -382,10 +382,10 @@ if st.session_state.run_main_analysis_once and not sub.empty:
                 title_text=f"Variables: {y_axis_trait_selected} en fonction de {x_axis_trait_selected}", title_x=0.5,
                 xaxis_title=x_axis_trait_selected, yaxis_title=y_axis_trait_selected
             )
-            # MODIFICATION: Définir le dragmode pour le graphique interactif
             fig_interactive_scatter.update_layout(dragmode='pan')
 
-            st.plotly_chart(fig_interactive_scatter, use_container_width=True) # config={'scrollZoom': True} est généralement le défaut
+            # MODIFICATION: Ajout explicite de config pour scrollZoom
+            st.plotly_chart(fig_interactive_scatter, use_container_width=True, config={'scrollZoom': True})
         elif not (x_axis_trait_selected and y_axis_trait_selected):
             st.warning("Veuillez sélectionner des variables pour les axes X et Y.")
         elif pdf.empty or len(sub) != len(pdf) :
