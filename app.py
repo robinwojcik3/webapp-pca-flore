@@ -113,7 +113,7 @@ if 'run_main_analysis_once' not in st.session_state:
 # ---------------------------------------------------------------------------- #
 # LAYOUT DE LA PAGE (SECTION ENTRÉE UTILISATEUR)
 # ---------------------------------------------------------------------------- #
-col_input, col_pca_plot_container = st.columns([1, 3])
+col_input, col_pca_plot_container = st.columns([1, 3]) 
 
 with col_input:
     st.subheader("CORTEGE FLORISTIQUE")
@@ -130,12 +130,12 @@ with col_input:
 
 fig_pca = None
 fig_dend = None
-vip_styled = None
-vip_data_df = pd.DataFrame()
-cluster_compositions_data = []
-sub = pd.DataFrame()
-pdf = pd.DataFrame()
-X_for_dendro = np.array([])
+vip_styled = None 
+vip_data_df = pd.DataFrame() 
+cluster_compositions_data = [] 
+sub = pd.DataFrame() 
+pdf = pd.DataFrame() 
+X_for_dendro = np.array([]) 
 
 # ---------------------------------------------------------------------------- #
 # ANALYSE PRINCIPALE (CALCULS)
@@ -171,13 +171,13 @@ if run_main_analysis_button and not ref.empty:
             st.warning("Non trouvées dans la base de traits : " + ", ".join(not_found_user_raw_names), icon="⚠️")
 
     if sub.empty:
-        st.error("Aucune des espèces saisies n'a pu être utilisée pour l'analyse.")
+        st.error("Aucune des espèces saisies (après déduplication et recherche dans la base de traits) n'a pu être utilisée pour l'analyse.")
         st.session_state.run_main_analysis_once = False; st.stop()
     if sub.shape[0] < n_clusters_selected and n_clusters_selected > 0 :
-        st.error(f"Le nombre d'espèces trouvées ({sub.shape[0]}) est inférieur au nombre de clusters demandé ({n_clusters_selected}).");
+        st.error(f"Le nombre d'espèces uniques trouvées et utilisées ({sub.shape[0]}) est inférieur au nombre de clusters demandé ({n_clusters_selected}).");
         st.session_state.run_main_analysis_once = False; st.stop()
     if sub.shape[0] < 2:
-        st.error(f"Au moins 2 espèces sont nécessaires. {sub.shape[0]} trouvée(s).");
+        st.error(f"Au moins 2 espèces uniques sont nécessaires pour l'analyse. {sub.shape[0]} espèce(s) trouvée(s) et utilisée(s).");
         st.session_state.run_main_analysis_once = False; st.stop()
 
     user_input_binom_to_raw_map = { " ".join(s_raw.split()[:2]).lower(): s_raw for s_raw in species_raw_unique }
@@ -216,7 +216,7 @@ if run_main_analysis_button and not ref.empty:
             elif default_x_init: default_y_init = default_x_init
         st.session_state.x_axis_trait_interactive, st.session_state.y_axis_trait_interactive = default_x_init, default_y_init
     except Exception as e:
-        st.error(f"Erreur analyse ACP : {e}"); st.exception(e)
+        st.error(f"Une erreur est survenue lors de l'analyse ACP : {e}"); st.exception(e)
         st.session_state.run_main_analysis_once = False; st.stop()
 
 if st.session_state.run_main_analysis_once:
@@ -227,11 +227,11 @@ if st.session_state.run_main_analysis_once:
 
     if not pdf.empty:
         if "Cluster" not in pdf.columns: pdf["Cluster"] = "0"
-        fig_pca = px.scatter(pdf, x="PC1", y="PC2" if "PC2" in pdf.columns else None, color="Cluster", text="Espece_User", hover_name="Espece_User", custom_data=["Espece_User", "Ecologie"], template="plotly_dark", height=600, color_discrete_sequence=COLOR_SEQUENCE)
+        fig_pca = px.scatter(pdf, x="PC1", y="PC2" if pdf.shape[1] > 1 and "PC2" in pdf.columns else None, color="Cluster", text="Espece_User", hover_name="Espece_User", custom_data=["Espece_User", "Ecologie"], template="plotly_dark", height=600, color_discrete_sequence=COLOR_SEQUENCE)
         fig_pca.update_traces(textposition="top center", marker=dict(opacity=0.7), hovertemplate=("<b>%{customdata[0]}</b><br><br><i>Écologie:</i><br>%{customdata[1]}<extra></extra>"))
         unique_clusters_pca = sorted(pdf["Cluster"].unique())
         cluster_color_map_pca = {lbl: COLOR_SEQUENCE[i % len(COLOR_SEQUENCE)] for i, lbl in enumerate(unique_clusters_pca)}
-        if "PC2" in pdf.columns:
+        if "PC2" in pdf.columns and pdf.shape[1] > 1 :
             for cluster_label in unique_clusters_pca:
                 cluster_points_df_pca = pdf[pdf["Cluster"] == cluster_label]
                 if "PC1" in cluster_points_df_pca.columns and "PC2" in cluster_points_df_pca.columns:
@@ -239,7 +239,7 @@ if st.session_state.run_main_analysis_once:
                     if len(unique_cluster_points_pca) >= MIN_POINTS_FOR_HULL:
                         try:
                             hull_pca = ConvexHull(unique_cluster_points_pca)
-                            hull_path = unique_cluster_points_pca[np.append(hull_pca.vertices, hull_pca.vertices[0])] # Closed path
+                            hull_path = unique_cluster_points_pca[np.append(hull_pca.vertices, hull_pca.vertices[0])] 
                             clr = cluster_color_map_pca.get(cluster_label, COLOR_SEQUENCE[0])
                             fig_pca.add_trace(go.Scatter(x=hull_path[:, 0], y=hull_path[:, 1], fill="toself", fillcolor=clr, line=dict(color=clr, width=1.5), mode='lines', name=f'Cluster {cluster_label} Hull', opacity=0.2, showlegend=False, hoverinfo='skip'))
                         except Exception as e: print(f"Hull ACP {cluster_label}: {e}")
@@ -250,171 +250,187 @@ if st.session_state.run_main_analysis_once:
         if X_for_dendro.shape[0] > 1:
             Z = linkage(X_for_dendro, method="ward")
             dyn_thresh = 0
-            if n_clusters_selected > 1 and (n_clusters_selected -1) <= Z.shape[0] : # Check index bounds
-                threshold_idx = max(0, Z.shape[0] - (n_clusters_selected -1) ) # Ensure non-negative index for Z
-                if threshold_idx < Z.shape[0]: # Ensure index is within bounds
-                     dyn_thresh = Z[threshold_idx, 2] * 0.99 # Access distance for cutting
-                     # A common heuristic for color_threshold with n_clusters: Z[-(n_clusters_selected-1), 2] if n_clusters_selected > 1
-                     # If n_clusters_selected = 2, we want Z[-1,2]. If n_clusters_selected = N, Z[-(N-1),2]
-                     if n_clusters_selected > 1 and (n_clusters_selected -1) <= Z.shape[0] :
-                         dyn_thresh = Z[-(n_clusters_selected-1), 2] * 0.99 # distance of the (k-1)th last merge
-                     elif Z.shape[0] > 0: dyn_thresh = Z[0, 2] / 2 # Fallback
-                elif Z.shape[0] > 0: dyn_thresh = Z[0,2] / 2
+            if n_clusters_selected > 1 and (n_clusters_selected -1) <= Z.shape[0] : 
+                if (-(n_clusters_selected-1) + Z.shape[0] >=0): # Check if the index is valid
+                    dyn_thresh = Z[-(n_clusters_selected-1), 2] * 0.99 
+                elif Z.shape[0] > 0 : dyn_thresh = Z[0, 2] / 2 
+            elif Z.shape[0] > 0: dyn_thresh = Z[0, 2] / 2
             fig_dend = ff.create_dendrogram(X_for_dendro, orientation="left", labels=pdf["Espece_User"].tolist(), linkagefun=lambda _: Z, color_threshold=dyn_thresh if n_clusters_selected > 1 else 0, colorscale=COLOR_SEQUENCE)
             fig_dend.update_layout(template="plotly_dark", height=max(650, sub.shape[0] * 20), title_text="Dendrogramme", title_x=0.5)
         else: fig_dend = None
 
 # ---------------------------------------------------------------------------- #
-# SECTION 1: AFFICHAGE DU GRAPHIQUE ACP
+# SECTION 1: AFFICHAGE DU GRAPHIQUE ACP 
 # ---------------------------------------------------------------------------- #
 with col_pca_plot_container:
     if fig_pca: st.plotly_chart(fig_pca, use_container_width=True)
-    elif run_main_analysis_button and ref.empty: st.warning("Chargez les données de traits pour l'ACP.")
+    elif run_main_analysis_button and ref.empty: st.warning("Veuillez d'abord charger des données de traits pour afficher le graphique ACP.")
     elif run_main_analysis_button and sub.empty : st.warning("Aucune espèce valide pour l'analyse ACP.")
-    elif st.session_state.run_main_analysis_once and not fig_pca: st.info("Graphique ACP affiché ici après analyse.")
-    elif not st.session_state.run_main_analysis_once and not ref.empty: st.info("Prêt à lancer l'analyse.")
+    elif st.session_state.run_main_analysis_once and not fig_pca: st.info("Le graphique ACP sera affiché ici après une analyse principale réussie.")
+    elif not st.session_state.run_main_analysis_once and not ref.empty: st.info("Prêt à lancer l'analyse. Configurez les options à gauche et cliquez sur 'Lancer l'analyse principale'.")
 if not st.session_state.run_main_analysis_once and ref.empty:
-    with col_input: st.warning("Données de référence non chargées ('data_ref.csv').")
+    with col_input: st.warning("Les données de référence n'ont pas pu être chargées. Vérifiez le fichier 'data_ref.csv'.")
 
 # ---------------------------------------------------------------------------- #
-# SECTION 2: EXPLORATION INTERACTIVE DES VARIABLES
+# SECTION 2: EXPLORATION INTERACTIVE DES VARIABLES (PLEINE LARGEUR)
 # ---------------------------------------------------------------------------- #
-if st.session_state.run_main_analysis_once and not sub.empty:
+if st.session_state.run_main_analysis_once and not sub.empty: 
     st.markdown("---"); st.subheader("🔬 Exploration interactive des variables")
-    numeric_trait_names = [col for col in sub.columns if col.lower() != "espece" and pd.api.types.is_numeric_dtype(sub[col])]
+    potential_traits = [col for col in sub.columns if col.lower() != "espece"]
+    numeric_trait_names = [col for col in potential_traits if pd.api.types.is_numeric_dtype(sub[col])]
 
     if len(numeric_trait_names) >= 2:
-        st.markdown("##### Sélectionnez les variables pour les axes :");
-        default_x = st.session_state.get('x_axis_trait_interactive', numeric_trait_names[0])
-        default_y = st.session_state.get('y_axis_trait_interactive', numeric_trait_names[1] if len(numeric_trait_names)>1 else numeric_trait_names[0])
-        if default_x not in numeric_trait_names: default_x = numeric_trait_names[0]
-        if default_y not in numeric_trait_names: default_y = numeric_trait_names[1] if len(numeric_trait_names)>1 else numeric_trait_names[0]
+        st.markdown("##### Sélectionnez les variables pour les axes du nuage de points :");
+        current_x_trait = st.session_state.get('x_axis_trait_interactive', numeric_trait_names[0])
+        current_y_trait = st.session_state.get('y_axis_trait_interactive', numeric_trait_names[1] if len(numeric_trait_names)>1 else numeric_trait_names[0])
+        if current_x_trait not in numeric_trait_names: current_x_trait = numeric_trait_names[0] if numeric_trait_names else None
+        if current_y_trait not in numeric_trait_names: current_y_trait = (numeric_trait_names[1] if len(numeric_trait_names) > 1 else (numeric_trait_names[0] if numeric_trait_names else None))
         
-        col_sel_x, col_sel_y = st.columns(2)
-        with col_sel_x: x_axis = st.radio("Axe X:", numeric_trait_names, index=numeric_trait_names.index(default_x), key="ixr")
-        with col_sel_y: y_axis = st.radio("Axe Y:", numeric_trait_names, index=numeric_trait_names.index(default_y), key="iyr")
-        st.session_state.x_axis_trait_interactive, st.session_state.y_axis_trait_interactive = x_axis, y_axis
+        col_scatter_select_x, col_scatter_select_y = st.columns([1,1])
+        with col_scatter_select_x:
+            x_axis_trait_selected = st.radio("Axe X:", numeric_trait_names, index=numeric_trait_names.index(current_x_trait) if current_x_trait in numeric_trait_names else 0, key="interactive_x_radio")
+        with col_scatter_select_y:
+            y_axis_trait_selected = st.radio("Axe Y:", numeric_trait_names, index=numeric_trait_names.index(current_y_trait) if current_y_trait in numeric_trait_names else (1 if len(numeric_trait_names) > 1 else 0), key="interactive_y_radio")
+        st.session_state.x_axis_trait_interactive = x_axis_trait_selected
+        st.session_state.y_axis_trait_interactive = y_axis_trait_selected
 
-        if x_axis and y_axis and not pdf.empty and len(sub) == len(pdf):
-            # plot_data_interactive contient les positions originales des points
+        if x_axis_trait_selected and y_axis_trait_selected and not pdf.empty and len(sub) == len(pdf):
             plot_data_interactive = pd.DataFrame({
                 'Espece_User': pdf['Espece_User'].values, 'Ecologie': pdf['Ecologie'].values,
-                x_axis: sub[x_axis].values, y_axis: sub[y_axis].values,
+                x_axis_trait_selected: sub[x_axis_trait_selected].values.copy(), 
+                y_axis_trait_selected: sub[y_axis_trait_selected].values.copy(),
                 'Cluster': pdf['Cluster'].values
             })
-
-            # MODIFICATION: Gestion des étiquettes de texte via annotations
-            custom_annotations = []
-            # Identifier les groupes de points avec les mêmes coordonnées (basé sur les valeurs originales)
-            # Utiliser des noms de colonnes temporaires sûrs pour groupby
-            temp_x_col_grp = "_temp_x_grp_"
-            temp_y_col_grp = "_temp_y_grp_"
-            plot_data_interactive[temp_x_col_grp] = plot_data_interactive[x_axis]
-            plot_data_interactive[temp_y_col_grp] = plot_data_interactive[y_axis]
             
-            duplicates_mask = plot_data_interactive.duplicated(subset=[temp_x_col_grp, temp_y_col_grp], keep=False)
+            # MODIFICATION: Logique pour le jittering des points superposés (REMISE EN PLACE)
+            plot_data_to_use = plot_data_interactive.copy()
+             # Utiliser des noms de colonnes temporaires sûrs pour groupby afin d'éviter les problèmes avec les caractères spéciaux dans les noms de traits
+            temp_x_col_grp = "_temp_x_group_col_" 
+            temp_y_col_grp = "_temp_y_group_col_"
+            plot_data_to_use[temp_x_col_grp] = plot_data_to_use[x_axis_trait_selected] # Copier les valeurs originales pour le groupby
+            plot_data_to_use[temp_y_col_grp] = plot_data_to_use[y_axis_trait_selected]
 
-            # Points non superposés : texte simple au-dessus du point
-            for idx, row in plot_data_interactive[~duplicates_mask].iterrows():
-                custom_annotations.append(go.layout.Annotation(
-                        x=row[x_axis], y=row[y_axis], text=row['Espece_User'],
-                        showarrow=False, xanchor='center', yanchor='bottom', yshift=7, font=dict(size=9) ))
-            
-            # Points superposés : décaler les textes circulairement
+            duplicates_mask = plot_data_to_use.duplicated(subset=[temp_x_col_grp, temp_y_col_grp], keep=False)
+
             if duplicates_mask.any():
-                points_to_adjust_text = plot_data_interactive[duplicates_mask]
+                x_min_val = plot_data_to_use[x_axis_trait_selected].min()
+                x_max_val = plot_data_to_use[x_axis_trait_selected].max()
+                y_min_val = plot_data_to_use[y_axis_trait_selected].min()
+                y_max_val = plot_data_to_use[y_axis_trait_selected].max()
+                x_range_val = x_max_val - x_min_val
+                y_range_val = y_max_val - y_min_val
                 
-                x_min, x_max = plot_data_interactive[x_axis].min(), plot_data_interactive[x_axis].max()
-                y_min, y_max = plot_data_interactive[y_axis].min(), plot_data_interactive[y_axis].max()
-                x_range = x_max - x_min; y_range = y_max - y_min
+                jitter_strength_x = x_range_val * 0.015 if x_range_val > 1e-9 else (abs(plot_data_to_use[x_axis_trait_selected].mean()) * 0.015 if abs(plot_data_to_use[x_axis_trait_selected].mean()) > 1e-9 else 0.015)
+                jitter_strength_y = y_range_val * 0.015 if y_range_val > 1e-9 else (abs(plot_data_to_use[y_axis_trait_selected].mean()) * 0.015 if abs(plot_data_to_use[y_axis_trait_selected].mean()) > 1e-9 else 0.015)
+                if abs(jitter_strength_x) < 1e-9: jitter_strength_x = 0.015 # Fallback minimum
+                if abs(jitter_strength_y) < 1e-9: jitter_strength_y = 0.015 # Fallback minimum
 
-                offset_scale_x = (x_range * 0.025 if x_range > 1e-9 else (abs(plot_data_interactive[x_axis].mean()) * 0.025 if abs(plot_data_interactive[x_axis].mean()) > 1e-9 else 0.025))
-                offset_scale_y = (y_range * 0.025 if y_range > 1e-9 else (abs(plot_data_interactive[y_axis].mean()) * 0.025 if abs(plot_data_interactive[y_axis].mean()) > 1e-9 else 0.025))
-                if abs(offset_scale_x) < 1e-9: offset_scale_x = 0.025
-                if abs(offset_scale_y) < 1e-9: offset_scale_y = 0.025
-
-                grouped_for_text = points_to_adjust_text.groupby([temp_x_col_grp, temp_y_col_grp])
-                for (original_x_val, original_y_val), group_df in grouped_for_text:
-                    n_duplicates = len(group_df)
-                    for i, (idx_g, row_g) in enumerate(group_df.iterrows()):
-                        angle = (2 * np.pi * i / n_duplicates) + (np.pi / (2*n_duplicates)) # Offset angle slightly for better spacing
-                        # Position du texte décalée par rapport au point original
-                        text_x = original_x_val + offset_scale_x * np.cos(angle)
-                        text_y = original_y_val + offset_scale_y * np.sin(angle)
-                        custom_annotations.append(go.layout.Annotation(
-                            x=text_x, y=text_y, ax=original_x_val, ay=original_y_val, # Ancres pour flèches (si showarrow=True)
-                            text=row_g['Espece_User'], showarrow=False, # Mettre showarrow=True pour des petites flèches
-                            # arrowhead=2, arrowsize=0.8, arrowwidth=1, # Options de flèche
-                            xanchor='center', yanchor='middle', font=dict(size=9) ))
+                grouped_for_jitter = plot_data_to_use[duplicates_mask].groupby([temp_x_col_grp, temp_y_col_grp])
+                for _, group in grouped_for_jitter:
+                    num_duplicates_in_group = len(group)
+                    if num_duplicates_in_group > 1:
+                        # np.random.seed(42) # Décommenter pour un jitter reproductible
+                        for i, idx in enumerate(group.index):
+                            angle = 2 * np.pi * i / num_duplicates_in_group
+                            offset_x = jitter_strength_x * np.cos(angle)
+                            offset_y = jitter_strength_y * np.sin(angle)
+                            
+                            if not pd.api.types.is_float_dtype(plot_data_to_use[x_axis_trait_selected]):
+                                plot_data_to_use[x_axis_trait_selected] = plot_data_to_use[x_axis_trait_selected].astype(float)
+                            if not pd.api.types.is_float_dtype(plot_data_to_use[y_axis_trait_selected]):
+                                plot_data_to_use[y_axis_trait_selected] = plot_data_to_use[y_axis_trait_selected].astype(float)
+                            plot_data_to_use.loc[idx, x_axis_trait_selected] += offset_x
+                            plot_data_to_use.loc[idx, y_axis_trait_selected] += offset_y
             
-            plot_data_interactive.drop(columns=[temp_x_col_grp, temp_y_col_grp], inplace=True)
-            # FIN MODIFICATION ANNOTATIONS
+            plot_data_to_use.drop(columns=[temp_x_col_grp, temp_y_col_grp], inplace=True) # Nettoyage des colonnes temporaires
+            # FIN MODIFICATION JITTERING
 
-            # Créer la figure SANS le paramètre 'text' pour px.scatter, car géré par les annotations
+            # Utiliser plot_data_to_use (qui peut contenir des valeurs jittered) pour le graphique
             fig_interactive_scatter = px.scatter(
-                plot_data_interactive, x=x_axis, y=y_axis, color="Cluster",
-                hover_name="Espece_User",
-                custom_data=["Espece_User", "Ecologie", x_axis, y_axis], # Valeurs originales pour hover
+                plot_data_to_use, x=x_axis_trait_selected, y=y_axis_trait_selected,
+                color="Cluster", text="Espece_User", hover_name="Espece_User",
+                custom_data=["Espece_User", "Ecologie", x_axis_trait_selected, y_axis_trait_selected], # x_axis et y_axis ici seront les valeurs jittered
                 template="plotly_dark", height=600, color_discrete_sequence=COLOR_SEQUENCE
             )
-            fig_interactive_scatter.update_layout(annotations=custom_annotations) # Ajouter les annotations calculées
+            
+            # MODIFICATION: Taille du texte et hovertemplate simplifié
             fig_interactive_scatter.update_traces(
-                marker=dict(opacity=0.8, size=8), # Pas de textposition, géré par annotations
-                hovertemplate=("<b>%{customdata[0]}</b><br>" +
-                               f"<br><i>{x_axis}:</i> %{{customdata[2]}}<br>" +
-                               f"<i>{y_axis}:</i> %{{customdata[3]}}<br>" +
-                               "<br><i>Écologie:</i><br>%{customdata[1]}<extra></extra>")
+                textposition="top center", 
+                marker=dict(opacity=0.8, size=8),
+                textfont=dict(size=10), # Augmentation de la taille du texte de l'étiquette
+                hovertemplate=(
+                    "<b>%{customdata[0]}</b><br>" + # Espece_User
+                    "<br><i>Écologie:</i><br>%{customdata[1]}<extra></extra>" # Ecologie seulement
+                )
             )
-            # Convex Hull basé sur les positions originales des points (plot_data_interactive)
-            unique_clusters_interactive = sorted(plot_data_interactive["Cluster"].unique())
+            # FIN MODIFICATION TAILLE TEXTE ET HOVERTEMPLATE
+
+            # Convex Hull basé sur les positions des points (potentiellement jittered) de plot_data_to_use
+            unique_clusters_interactive = sorted(plot_data_to_use["Cluster"].unique())
             cluster_color_map_interactive = {lbl: COLOR_SEQUENCE[i % len(COLOR_SEQUENCE)] for i, lbl in enumerate(unique_clusters_interactive)}
             for cluster_label in unique_clusters_interactive:
-                cluster_points_df = plot_data_interactive[plot_data_interactive["Cluster"] == cluster_label]
-                if x_axis in cluster_points_df and y_axis in cluster_points_df:
-                    points_for_hull = cluster_points_df[[x_axis, y_axis]].drop_duplicates().values
+                cluster_points_df_interactive = plot_data_to_use[plot_data_to_use["Cluster"] == cluster_label]
+                if x_axis_trait_selected in cluster_points_df_interactive and y_axis_trait_selected in cluster_points_df_interactive:
+                    points_for_hull = cluster_points_df_interactive[[x_axis_trait_selected, y_axis_trait_selected]].drop_duplicates().values
                     if len(points_for_hull) >= MIN_POINTS_FOR_HULL:
                         try:
-                            hull_interactive = ConvexHull(points_for_hull)
+                            hull_interactive = ConvexHull(points_for_hull) 
                             hull_path_interactive = points_for_hull[np.append(hull_interactive.vertices, hull_interactive.vertices[0])]
                             clr_int = cluster_color_map_interactive.get(cluster_label, COLOR_SEQUENCE[0])
                             fig_interactive_scatter.add_trace(go.Scatter(
                                 x=hull_path_interactive[:, 0], y=hull_path_interactive[:, 1], fill="toself", fillcolor=clr_int,
-                                line=dict(color=clr_int, width=1.5), mode='lines', name=f'Hull Cl. {cluster_label}',
+                                line=dict(color=clr_int, width=1.5), mode='lines', name=f'Cluster {cluster_label} Hull', 
                                 opacity=0.2, showlegend=False, hoverinfo='skip' ))
-                        except Exception as e: print(f"Hull Inter.: {cluster_label} ({x_axis}, {y_axis}): {e}")
-            fig_interactive_scatter.update_layout(title_text=f"Variables: {y_axis} / {x_axis}", title_x=0.5, xaxis_title=x_axis, yaxis_title=y_axis)
+                        except Exception as e: print(f"Hull Inter.: {cluster_label} ({x_axis_trait_selected}, {y_axis_trait_selected}): {e}")
+            fig_interactive_scatter.update_layout(
+                title_text=f"Variables: {y_axis_trait_selected} en fonction de {x_axis_trait_selected}", title_x=0.5,
+                xaxis_title=x_axis_trait_selected, yaxis_title=y_axis_trait_selected
+            )
             st.plotly_chart(fig_interactive_scatter, use_container_width=True)
-        elif not (x_axis and y_axis): st.warning("Sélectionnez variables X et Y.")
-        elif pdf.empty or len(sub) != len(pdf): st.warning("Données pour graphique interactif non prêtes.")
-    elif len(numeric_trait_names) == 1: st.warning("Au moins deux traits numériques requis pour nuage de points 2D.")
-    else: st.warning("Aucun trait numérique pour exploration interactive.")
+        elif not (x_axis_trait_selected and y_axis_trait_selected):
+            st.warning("Veuillez sélectionner des variables pour les axes X et Y.")
+        elif pdf.empty or len(sub) != len(pdf) :
+            st.warning("Données pour le graphique interactif non prêtes ou incohérentes.")
+    elif len(numeric_trait_names) == 1:
+        st.warning("Au moins deux traits numériques sont nécessaires pour un nuage de points 2D interactif.")
+    else:
+        st.warning("Aucun trait numérique trouvé pour l'exploration interactive.")
 
 # ---------------------------------------------------------------------------- #
-# SECTION 3: IMPORTANCE DES VARIABLES ET COMPOSITION DES CLUSTERS
+# SECTION 3: IMPORTANCE DES VARIABLES ET COMPOSITION DES CLUSTERS (EN COLONNES)
 # ---------------------------------------------------------------------------- #
-if st.session_state.run_main_analysis_once and not sub.empty:
-    col_vars, col_cluster_comp = st.columns([1, 2])
-    with col_vars:
+if st.session_state.run_main_analysis_once and not sub.empty: 
+    col_vars_main, col_cluster_comp_main = st.columns([1, 2])
+    with col_vars_main:
         st.subheader("Importance des Variables (ACP)")
-        if vip_styled is not None: st.write(vip_styled.to_html(escape=False), unsafe_allow_html=True)
-        else: st.info("Tableau d'importance des variables affiché ici.")
-    with col_cluster_comp:
+        if vip_styled is not None:
+            st.write(vip_styled.to_html(escape=False), unsafe_allow_html=True)
+        else: 
+            st.info("Le tableau d'importance des variables (ACP) sera affiché ici.")
+    with col_cluster_comp_main:
         st.subheader("Composition des Clusters (ACP)")
         if cluster_compositions_data and any(d['count'] > 0 for d in cluster_compositions_data):
-            num_cl_found = len([d for d in cluster_compositions_data if d['count']>0])
-            cols_cl = st.columns(min(num_cl_found, 3))
-            col_idx = 0
-            for comp_data in cluster_compositions_data:
-                if comp_data['count'] > 0:
-                    with cols_cl[col_idx % min(num_cl_found, 3)]:
-                        st.markdown(f"**Cluster {comp_data['cluster_label']}** ({comp_data['count']} espèces)")
-                        for sp_name in comp_data['species_list']: st.markdown(f"- {sp_name}")
-                    col_idx +=1
-        else: st.info("Composition des clusters affichée ici.")
+            num_clusters_found_display = len([d for d in cluster_compositions_data if d['count']>0]) # Nombre de clusters avec au moins une espèce
+            num_display_cols = min(num_clusters_found_display, 3) 
+            
+            if num_display_cols > 0: # S'assurer qu'il y a des colonnes à créer
+                cluster_cols = st.columns(num_display_cols)
+                current_col_idx = 0
+                for comp_data in cluster_compositions_data:
+                    if comp_data['count'] > 0: # Afficher seulement les clusters non vides
+                        with cluster_cols[current_col_idx % num_display_cols]:
+                            st.markdown(f"**Cluster {comp_data['cluster_label']}** ({comp_data['count']} espèces)")
+                            for species_name in comp_data['species_list']: st.markdown(f"- {species_name}")
+                        current_col_idx += 1
+            else:
+                 st.info("Aucun cluster (ACP) avec des espèces à afficher.")
+        else: 
+            st.info("La composition des clusters (ACP) sera affichée ici.")
 
 # ---------------------------------------------------------------------------- #
-# SECTION 4: AFFICHAGE DU DENDROGRAMME
+# SECTION 4: AFFICHAGE DU DENDROGRAMME (PLEINE LARGEUR, EN DERNIER)
 # ---------------------------------------------------------------------------- #
-if fig_dend: st.plotly_chart(fig_dend, use_container_width=True)
-elif st.session_state.run_main_analysis_once and not sub.empty and species_binom_user_unique:
-    st.info("Dendrogramme non généré (conditions non remplies).")
+if fig_dend: 
+    st.plotly_chart(fig_dend, use_container_width=True)
+elif st.session_state.run_main_analysis_once and not sub.empty and species_binom_user_unique :
+    st.info("Le dendrogramme n'a pas pu être généré (nécessite au moins 2 espèces uniques après traitement ou problème de données pour le linkage).")
