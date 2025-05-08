@@ -357,7 +357,7 @@ if st.session_state.run_main_analysis_once and not sub.empty:
             fig_interactive_scatter.update_traces(
                 textposition="top center", 
                 marker=dict(opacity=0.8, size=8),
-                textfont=dict(size=12), # Augmentation de la taille du texte de l'étiquette
+                textfont=dict(size=16), # Augmentation de la taille du texte de l'étiquette
                 hovertemplate=(
                     "<b>%{customdata[0]}</b><br>" + # Espece_User
                     "<br><i>Écologie:</i><br>%{customdata[1]}<extra></extra>" # Ecologie seulement
