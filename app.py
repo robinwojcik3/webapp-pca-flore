@@ -102,7 +102,7 @@ ecology_df = load_ecology_data()
 # ---------------------------------------------------------------------------- #
 # LAYOUT DE LA PAGE
 # ---------------------------------------------------------------------------- #
-col_input, col_pca_plot = st.columns([1, 3]) # Colonne principale pour ACP et résultats associés
+col_input, col_pca_plot = st.columns([1, 3]) 
 
 with col_input:
     st.subheader("CORTEGE FLORISTIQUE")
@@ -120,10 +120,10 @@ with col_input:
 fig_pca = None
 fig_dend = None
 vip_styled = None
+vip_data_df = pd.DataFrame() # Initialiser vip_data_df
 cluster_compositions_data = []
-# Initialiser sub en dehors du if run pour qu'il soit défini même si l'analyse n'est pas lancée
 sub = pd.DataFrame() 
-pdf = pd.DataFrame() # Initialiser pdf également
+pdf = pd.DataFrame() 
 
 # ---------------------------------------------------------------------------- #
 # ANALYSE (déclenchée par le bouton)
@@ -143,9 +143,9 @@ if run and not ref.empty:
                 indices_to_keep_from_ref.append(matches_in_ref['Original_Ref_Index'].iloc[0])
     
     if indices_to_keep_from_ref:
-        sub = ref.loc[indices_to_keep_from_ref].copy() # 'sub' est défini ici
+        sub = ref.loc[indices_to_keep_from_ref].copy() 
     else:
-        sub = pd.DataFrame(columns=ref.columns) # 'sub' est un DataFrame vide
+        sub = pd.DataFrame(columns=ref.columns) 
 
     found_ref_binom_values_in_sub = []
     if not sub.empty:
@@ -174,11 +174,11 @@ if run and not ref.empty:
         st.error("Aucune des espèces saisies (après déduplication et recherche dans la base de traits) n'a pu être utilisée pour l'analyse.")
         st.stop()
 
-    if sub.shape[0] < n_clusters_selected:
+    if sub.shape[0] < n_clusters_selected and n_clusters_selected > 0 : # Ajout de condition pour n_clusters_selected > 0
         st.error(f"Le nombre d'espèces uniques trouvées et utilisées ({sub.shape[0]}) est inférieur au nombre de clusters demandé ({n_clusters_selected}).")
         st.stop()
     
-    if sub.shape[0] < 2: # Nécessaire pour PCA et souvent pour une visualisation de nuage de points significative
+    if sub.shape[0] < 2: 
         st.error(f"Au moins 2 espèces uniques sont nécessaires pour l'analyse. {sub.shape[0]} espèce(s) trouvée(s) et utilisée(s).")
         st.stop()
     
@@ -190,7 +190,7 @@ if run and not ref.empty:
     try:
         labels, pca, coords, X = core.analyse(sub, n_clusters_selected)
 
-        pdf = pd.DataFrame(coords, columns=[f"PC{i+1}" for i in range(coords.shape[1])]) # 'pdf' est défini ici
+        pdf = pd.DataFrame(coords, columns=[f"PC{i+1}" for i in range(coords.shape[1])]) 
         pdf["Cluster"] = labels.astype(str)
         pdf["Espece_Ref"] = sub["Espece"].values 
 
@@ -250,7 +250,16 @@ if run and not ref.empty:
                 elif len(unique_cluster_points) > 0: print(f"Note: Cluster {cluster_label}: pas assez de points uniques ({len(unique_cluster_points)}) pour l'enveloppe (min {min_points_for_hull}).")
         fig_pca.update_layout(title_text="Clusters d'espèces (ACP)", title_x=0.5, legend_title_text='Cluster')
 
-        if X.shape[0] > 1:
+        # Calcul de vip_data_df ici pour qu'il soit disponible pour le graphique interactif
+        loadings = pca.components_.T * (pca.explained_variance_ ** 0.5)
+        communal = (loadings**2).sum(axis=1)
+        vip_data_df = pd.DataFrame({ # vip_data_df est défini ici
+            "Variable": sub.columns[1:], "Communalité (%)": (communal * 100).round(0).astype(int),
+        }).sort_values("Communalité (%)", ascending=False).reset_index(drop=True)
+        vip_styled = vip_data_df.style.set_properties(**{'text-align': 'center'}, subset=['Communalité (%)']).format({"Communalité (%)": "{:}%"})
+
+
+        if X.shape[0] > 1: # Pour le dendrogramme
             Z = linkage(X, method="ward")
             dynamic_color_threshold = 0
             if n_clusters_selected > 1 and (n_clusters_selected -1) <= Z.shape[0] :
@@ -264,12 +273,6 @@ if run and not ref.empty:
             fig_dend.update_layout(template="plotly_dark", height=max(650, sub.shape[0] * 20), title_text="Dendrogramme", title_x=0.5)
         else: fig_dend = None
 
-        loadings = pca.components_.T * (pca.explained_variance_ ** 0.5)
-        communal = (loadings**2).sum(axis=1)
-        vip_data_df = pd.DataFrame({
-            "Variable": sub.columns[1:], "Communalité (%)": (communal * 100).round(0).astype(int),
-        }).sort_values("Communalité (%)", ascending=False).reset_index(drop=True)
-        vip_styled = vip_data_df.style.set_properties(**{'text-align': 'center'}, subset=['Communalité (%)']).format({"Communalité (%)": "{:}%"})
 
         cluster_compositions_data = []
         for c_label in sorted(pdf["Cluster"].unique()):
@@ -283,30 +286,29 @@ if run and not ref.empty:
 # ---------------------------------------------------------------------------- #
 # AFFICHAGE DES RESULTATS ACP ET ASSOCIES
 # ---------------------------------------------------------------------------- #
-with col_pca_plot: # Colonne principale pour ACP
+with col_pca_plot: 
     if fig_pca:
         st.plotly_chart(fig_pca, use_container_width=True)
     elif run and ref.empty:
         st.warning("Veuillez d'abord charger des données de traits pour afficher le graphique ACP.")
-    elif run and not species_binom_user_unique and not sub.empty : # Cas où des espèces ont été saisies mais aucune n'est dans sub
-         pass # Message d'erreur déjà géré par sub.empty
-    elif run: # Cas où l'analyse a été lancée mais fig_pca n'est pas généré pour une autre raison
+    elif run and not species_binom_user_unique and not sub.empty : 
+         pass 
+    elif run: 
         st.info("Le graphique ACP sera affiché ici après une analyse réussie.")
 
-# Section pour l'importance des variables et la composition des clusters (sous le graphique ACP)
-col_vars_main, col_cluster_comp_main = st.columns([1, 2]) # Ces colonnes sont sous la col_pca_plot implicitement
+col_vars_main, col_cluster_comp_main = st.columns([1, 2]) 
 with col_vars_main:
     st.subheader("Importance des Variables (ACP)")
-    if vip_styled is not None:
+    if vip_styled is not None: # vip_styled est basé sur vip_data_df
         st.write(vip_styled.to_html(escape=False), unsafe_allow_html=True)
-    elif run and not sub.empty: # Modifié pour s'afficher si l'analyse a tourné et sub n'est pas vide
+    elif run and not sub.empty: 
         st.info("Le tableau d'importance des variables (ACP) sera affiché ici.")
 with col_cluster_comp_main:
     st.subheader("Composition des Clusters (ACP)")
     if cluster_compositions_data:
         num_clusters_found = len(cluster_compositions_data)
         if num_clusters_found > 0:
-            num_display_cols = min(num_clusters_found, 3) # Ajusté pour potentiellement moins de colonnes
+            num_display_cols = min(num_clusters_found, 3) 
             cluster_cols = st.columns(num_display_cols)
             for i, comp_data in enumerate(cluster_compositions_data):
                 with cluster_cols[i % num_display_cols]: 
@@ -317,108 +319,139 @@ with col_cluster_comp_main:
     elif run and not sub.empty:
         st.info("La composition des clusters (ACP) sera affichée ici.")
 
-if fig_dend: # Affichage du dendrogramme sur toute la largeur
+# ---------------------------------------------------------------------------- #
+# NOUVEAU: EXPLORATION INTERACTIVE DES TRAITS BRUTS (Déplacé avant le dendrogramme)
+# ---------------------------------------------------------------------------- #
+if run and not sub.empty: 
+    st.markdown("---")
+    st.subheader("🔬 Exploration interactive des traits bruts")
+
+    potential_traits = [col for col in sub.columns if col.lower() != "espece"] 
+    numeric_trait_names = [
+        col for col in potential_traits if pd.api.types.is_numeric_dtype(sub[col])
+    ]
+
+    if len(numeric_trait_names) >= 2: # Nécessite au moins deux traits pour un graphique 2D
+        st.markdown("##### Sélectionnez les variables pour les axes du nuage de points :")
+        
+        # Déterminer les variables par défaut
+        default_x_trait = numeric_trait_names[0]
+        default_y_trait = numeric_trait_names[1]
+
+        if not vip_data_df.empty and len(vip_data_df) >= 2:
+            # S'assurer que les variables importantes sont bien dans numeric_trait_names
+            top_vars_from_vip = [var for var in vip_data_df["Variable"].tolist() if var in numeric_trait_names]
+            if len(top_vars_from_vip) >=1:
+                default_x_trait = top_vars_from_vip[0]
+            if len(top_vars_from_vip) >=2:
+                default_y_trait = top_vars_from_vip[1]
+                # S'assurer que x et y sont différents si possible
+                if default_x_trait == default_y_trait and len(numeric_trait_names) > 1:
+                    # Tenter de prendre le suivant dans numeric_trait_names si le premier de vip est identique au second
+                    # et que numeric_trait_names a d'autres options
+                    available_defaults_y = [t for t in numeric_trait_names if t != default_x_trait]
+                    if available_defaults_y:
+                        default_y_trait = available_defaults_y[0]
+
+
+        col_scatter_select_x, col_scatter_select_y = st.columns(2)
+        with col_scatter_select_x:
+            # MODIFIÉ: Utilisation de st.radio
+            x_axis_trait = st.radio(
+                "Axe X:",
+                options=numeric_trait_names,
+                index=numeric_trait_names.index(default_x_trait) if default_x_trait in numeric_trait_names else 0,
+                key="scatter_x_trait_radio"
+            )
+        with col_scatter_select_y:
+            # MODIFIÉ: Utilisation de st.radio
+            y_axis_trait = st.radio(
+                "Axe Y:",
+                options=numeric_trait_names,
+                index=numeric_trait_names.index(default_y_trait) if default_y_trait in numeric_trait_names else (1 if len(numeric_trait_names) > 1 else 0),
+                key="scatter_y_trait_radio"
+            )
+
+        if x_axis_trait and y_axis_trait:
+            if not pdf.empty: # pdf doit contenir Espece_User, Ecologie, Cluster
+                # 'sub' contient les valeurs des traits bruts. 'pdf' et 'sub' sont alignés par index.
+                # Assurer que les données pour le graphique interactif utilisent l'index de 'sub'
+                # pour garantir l'alignement avec les traits bruts.
+                
+                # Création de plot_data_interactive en s'assurant de l'alignement
+                # sub.index devrait correspondre à l'ordre des espèces dans pdf après l'analyse
+                
+                # Les données pour le graphique interactif doivent provenir de `sub` pour les traits
+                # et de `pdf` pour les métadonnées (Espece_User, Ecologie, Cluster)
+                # Il est crucial que `sub` et `pdf` soient alignés par leur index implicite (ordre des lignes)
+                # après la sélection des espèces et l'analyse ACP.
+                
+                # Vérifions la taille de sub et pdf
+                if len(sub) == len(pdf):
+                    plot_data_interactive = pd.DataFrame({
+                        'Espece_User': pdf['Espece_User'].values, # Utiliser .values pour éviter les problèmes d'index
+                        'Ecologie': pdf['Ecologie'].values,
+                        x_axis_trait: sub[x_axis_trait].values,
+                        y_axis_trait: sub[y_axis_trait].values,
+                        'Cluster': pdf['Cluster'].values 
+                    })
+
+                    fig_interactive_scatter = px.scatter(
+                        plot_data_interactive,
+                        x=x_axis_trait,
+                        y=y_axis_trait,
+                        color="Cluster", 
+                        text="Espece_User", # MODIFIÉ: Afficher le nom de l'espèce sur le point
+                        hover_name="Espece_User",
+                        custom_data=["Espece_User", "Ecologie", x_axis_trait, y_axis_trait], # Ajout des valeurs des traits pour le survol
+                        template="plotly_dark",
+                        height=600,
+                        color_discrete_sequence=color_sequence 
+                    )
+
+                    fig_interactive_scatter.update_traces(
+                        textposition="top center", # Position du nom de l'espèce
+                        marker=dict(opacity=0.8, size=8),
+                        hovertemplate=( # MODIFIÉ: hovertemplate pour inclure les valeurs des traits
+                            "<b>%{customdata[0]}</b><br>" +
+                            f"<br><i>{x_axis_trait}:</i> %{{customdata[2]}}<br>" + # Utiliser customdata pour les valeurs des traits
+                            f"<i>{y_axis_trait}:</i> %{{customdata[3]}}<br>" +
+                            "<br><i>Écologie:</i><br>%{customdata[1]}" + 
+                            "<extra></extra>" 
+                        )
+                    )
+                    
+                    fig_interactive_scatter.update_layout(
+                        title_text=f"Traits bruts: {y_axis_trait} en fonction de {x_axis_trait}",
+                        title_x=0.5,
+                        xaxis_title=x_axis_trait,
+                        yaxis_title=y_axis_trait
+                    )
+                    st.plotly_chart(fig_interactive_scatter, use_container_width=True)
+                else:
+                    st.warning("Discordance dans la taille des données pour le graphique interactif des traits bruts. Le graphique ne peut être généré.")
+            else:
+                st.warning("Les données pour le graphique interactif des traits bruts n'ont pas pu être préparées (dépend des résultats de l'ACP).")
+            
+    elif len(numeric_trait_names) == 1:
+        st.warning("Au moins deux traits numériques sont nécessaires dans les données pour créer un nuage de points à 2 dimensions pour l'exploration interactive.")
+    else: 
+        st.warning("Aucun trait numérique n'a été trouvé dans les données pour l'exploration interactive des traits bruts.")
+
+# ---------------------------------------------------------------------------- #
+# AFFICHAGE DU DENDROGRAMME (Déplacé après l'exploration interactive)
+# ---------------------------------------------------------------------------- #
+if fig_dend: 
     st.plotly_chart(fig_dend, use_container_width=True)
 elif run and not sub.empty and species_binom_user_unique :
     st.info("Le dendrogramme n'a pas pu être généré (nécessite au moins 2 espèces uniques ou problème de seuil).")
 
 
-# ---------------------------------------------------------------------------- #
-# NOUVEAU: EXPLORATION INTERACTIVE DES TRAITS BRUTS
-# ---------------------------------------------------------------------------- #
-if run and not sub.empty: # S'affiche si l'analyse a été lancée et que 'sub' contient des données
-    st.markdown("---")
-    st.subheader("🔬 Exploration interactive des traits bruts")
-
-    # Sélectionner uniquement les colonnes numériques de 'sub' pour les axes, en excluant 'Espece' si présente
-    potential_traits = [col for col in sub.columns if col.lower() != "espece"] # Exclure 'Espece' insensible à la casse
-    numeric_trait_names = [
-        col for col in potential_traits if pd.api.types.is_numeric_dtype(sub[col])
-    ]
-
-    if len(numeric_trait_names) >= 1: # On a besoin d'au moins un trait pour sélectionner
-        st.markdown("##### Sélectionnez les variables pour les axes du nuage de points :")
-        
-        # S'assurer qu'il y a au moins deux traits pour des sélections distinctes par défaut
-        default_y_index = 1 if len(numeric_trait_names) > 1 else 0
-        
-        col_scatter_select_x, col_scatter_select_y = st.columns(2)
-        with col_scatter_select_x:
-            x_axis_trait = st.selectbox(
-                "Axe X:",
-                options=numeric_trait_names,
-                index=0,
-                key="scatter_x_trait_select"
-            )
-        with col_scatter_select_y:
-            y_axis_trait = st.selectbox(
-                "Axe Y:",
-                options=numeric_trait_names,
-                index=default_y_index,
-                key="scatter_y_trait_select"
-            )
-
-        if x_axis_trait and y_axis_trait: # Toujours vrai si numeric_trait_names n'est pas vide
-            # Préparer les données pour le graphique interactif
-            # 'pdf' contient Espece_User, Ecologie (formatée), Cluster
-            # 'sub' contient les valeurs des traits bruts. 'pdf' et 'sub' sont alignés.
-            
-            # Vérifier que pdf n'est pas vide (signifie que l'ACP a réussi à un certain point)
-            if not pdf.empty:
-                plot_data_interactive = pd.DataFrame({
-                    'Espece_User': pdf['Espece_User'],
-                    'Ecologie': pdf['Ecologie'], 
-                    x_axis_trait: sub[x_axis_trait].values,
-                    y_axis_trait: sub[y_axis_trait].values,
-                    'Cluster': pdf['Cluster'] 
-                })
-
-                fig_interactive_scatter = px.scatter(
-                    plot_data_interactive,
-                    x=x_axis_trait,
-                    y=y_axis_trait,
-                    color="Cluster", 
-                    hover_name="Espece_User",
-                    custom_data=["Espece_User", "Ecologie"], 
-                    template="plotly_dark",
-                    height=600,
-                    color_discrete_sequence=color_sequence 
-                )
-
-                fig_interactive_scatter.update_traces(
-                    marker=dict(opacity=0.8, size=8),
-                    hovertemplate=(
-                        "<b>%{customdata[0]}</b><br>" +
-                        f"<br><i>{x_axis_trait}:</i> %{{x}}<br>" +
-                        f"<i>{y_axis_trait}:</i> %{{y}}<br>" +
-                        "<br><i>Écologie:</i><br>%{customdata[1]}" + 
-                        "<extra></extra>" 
-                    )
-                )
-                
-                fig_interactive_scatter.update_layout(
-                    title_text=f"Traits bruts: {y_axis_trait} en fonction de {x_axis_trait}",
-                    title_x=0.5,
-                    xaxis_title=x_axis_trait,
-                    yaxis_title=y_axis_trait
-                )
-                st.plotly_chart(fig_interactive_scatter, use_container_width=True)
-            else:
-                st.warning("Les données pour le graphique interactif des traits bruts n'ont pas pu être préparées (dépend des résultats de l'ACP).")
-        # else: # Cette condition n'est pas nécessaire car selectbox a toujours une valeur
-            # st.info("Veuillez sélectionner des traits pour les axes X et Y pour le nuage de points interactif.")
-            
-    elif len(numeric_trait_names) == 1:
-        st.warning("Au moins deux traits numériques sont nécessaires dans les données pour créer un nuage de points à 2 dimensions pour l'exploration interactive.")
-    else: # len(numeric_trait_names) == 0
-        st.warning("Aucun trait numérique n'a été trouvé dans les données pour l'exploration interactive des traits bruts.")
-
-
 # Message final si l'analyse n'a pas été lancée
 if not run and not ref.empty:
-    with col_pca_plot: # Utiliser la colonne principale pour ce message initial
+    with col_pca_plot: 
         st.info("Prêt à lancer l'analyse. Configurez les options à gauche et cliquez sur 'Lancer l'analyse'.")
 elif not run and ref.empty:
-     with col_input: # Si les données de référence ne sont pas chargées du tout.
+     with col_input: 
         st.warning("Les données de référence n'ont pas pu être chargées. Vérifiez le fichier 'data_ref.csv'.")
 
