@@ -244,6 +244,9 @@ if st.session_state.run_main_analysis_once:
                             fig_pca.add_trace(go.Scatter(x=hull_path[:, 0], y=hull_path[:, 1], fill="toself", fillcolor=clr, line=dict(color=clr, width=1.5), mode='lines', name=f'Cluster {cluster_label} Hull', opacity=0.2, showlegend=False, hoverinfo='skip'))
                         except Exception as e: print(f"Hull ACP {cluster_label}: {e}")
         fig_pca.update_layout(title_text="Clusters d'espèces (ACP)", title_x=0.5, legend_title_text='Cluster')
+        # MODIFICATION: Définir le dragmode pour le graphique PCA
+        fig_pca.update_layout(dragmode='pan')
+
 
         if not vip_data_df.empty: vip_styled = vip_data_df.style.set_properties(**{'text-align': 'center'}, subset=['Communalité (%)']).format({"Communalité (%)": "{:}%"})
         cluster_compositions_data = [{"cluster_label": c, "count": len(pdf.loc[pdf["Cluster"] == c, "Espece_User"].unique()), "species_list": sorted(list(pdf.loc[pdf["Cluster"] == c, "Espece_User"].unique()))} for c in sorted(pdf["Cluster"].unique())]
@@ -251,7 +254,7 @@ if st.session_state.run_main_analysis_once:
             Z = linkage(X_for_dendro, method="ward")
             dyn_thresh = 0
             if n_clusters_selected > 1 and (n_clusters_selected -1) <= Z.shape[0] : 
-                if (-(n_clusters_selected-1) + Z.shape[0] >=0): # Check if the index is valid
+                if (-(n_clusters_selected-1) + Z.shape[0] >=0): 
                     dyn_thresh = Z[-(n_clusters_selected-1), 2] * 0.99 
                 elif Z.shape[0] > 0 : dyn_thresh = Z[0, 2] / 2 
             elif Z.shape[0] > 0: dyn_thresh = Z[0, 2] / 2
@@ -263,7 +266,8 @@ if st.session_state.run_main_analysis_once:
 # SECTION 1: AFFICHAGE DU GRAPHIQUE ACP 
 # ---------------------------------------------------------------------------- #
 with col_pca_plot_container:
-    if fig_pca: st.plotly_chart(fig_pca, use_container_width=True)
+    if fig_pca: 
+        st.plotly_chart(fig_pca, use_container_width=True) # config={'scrollZoom': True} est généralement le défaut
     elif run_main_analysis_button and ref.empty: st.warning("Veuillez d'abord charger des données de traits pour afficher le graphique ACP.")
     elif run_main_analysis_button and sub.empty : st.warning("Aucune espèce valide pour l'analyse ACP.")
     elif st.session_state.run_main_analysis_once and not fig_pca: st.info("Le graphique ACP sera affiché ici après une analyse principale réussie.")
@@ -302,14 +306,11 @@ if st.session_state.run_main_analysis_once and not sub.empty:
                 'Cluster': pdf['Cluster'].values
             })
             
-            # MODIFICATION: Logique pour le jittering des points superposés (REMISE EN PLACE)
             plot_data_to_use = plot_data_interactive.copy()
-             # Utiliser des noms de colonnes temporaires sûrs pour groupby afin d'éviter les problèmes avec les caractères spéciaux dans les noms de traits
             temp_x_col_grp = "_temp_x_group_col_" 
             temp_y_col_grp = "_temp_y_group_col_"
-            plot_data_to_use[temp_x_col_grp] = plot_data_to_use[x_axis_trait_selected] # Copier les valeurs originales pour le groupby
+            plot_data_to_use[temp_x_col_grp] = plot_data_to_use[x_axis_trait_selected] 
             plot_data_to_use[temp_y_col_grp] = plot_data_to_use[y_axis_trait_selected]
-
             duplicates_mask = plot_data_to_use.duplicated(subset=[temp_x_col_grp, temp_y_col_grp], keep=False)
 
             if duplicates_mask.any():
@@ -322,14 +323,13 @@ if st.session_state.run_main_analysis_once and not sub.empty:
                 
                 jitter_strength_x = x_range_val * 0.015 if x_range_val > 1e-9 else (abs(plot_data_to_use[x_axis_trait_selected].mean()) * 0.015 if abs(plot_data_to_use[x_axis_trait_selected].mean()) > 1e-9 else 0.015)
                 jitter_strength_y = y_range_val * 0.015 if y_range_val > 1e-9 else (abs(plot_data_to_use[y_axis_trait_selected].mean()) * 0.015 if abs(plot_data_to_use[y_axis_trait_selected].mean()) > 1e-9 else 0.015)
-                if abs(jitter_strength_x) < 1e-9: jitter_strength_x = 0.015 # Fallback minimum
-                if abs(jitter_strength_y) < 1e-9: jitter_strength_y = 0.015 # Fallback minimum
+                if abs(jitter_strength_x) < 1e-9: jitter_strength_x = 0.015 
+                if abs(jitter_strength_y) < 1e-9: jitter_strength_y = 0.015 
 
                 grouped_for_jitter = plot_data_to_use[duplicates_mask].groupby([temp_x_col_grp, temp_y_col_grp])
                 for _, group in grouped_for_jitter:
                     num_duplicates_in_group = len(group)
                     if num_duplicates_in_group > 1:
-                        # np.random.seed(42) # Décommenter pour un jitter reproductible
                         for i, idx in enumerate(group.index):
                             angle = 2 * np.pi * i / num_duplicates_in_group
                             offset_x = jitter_strength_x * np.cos(angle)
@@ -342,30 +342,25 @@ if st.session_state.run_main_analysis_once and not sub.empty:
                             plot_data_to_use.loc[idx, x_axis_trait_selected] += offset_x
                             plot_data_to_use.loc[idx, y_axis_trait_selected] += offset_y
             
-            plot_data_to_use.drop(columns=[temp_x_col_grp, temp_y_col_grp], inplace=True) # Nettoyage des colonnes temporaires
-            # FIN MODIFICATION JITTERING
+            plot_data_to_use.drop(columns=[temp_x_col_grp, temp_y_col_grp], inplace=True) 
 
-            # Utiliser plot_data_to_use (qui peut contenir des valeurs jittered) pour le graphique
             fig_interactive_scatter = px.scatter(
                 plot_data_to_use, x=x_axis_trait_selected, y=y_axis_trait_selected,
                 color="Cluster", text="Espece_User", hover_name="Espece_User",
-                custom_data=["Espece_User", "Ecologie", x_axis_trait_selected, y_axis_trait_selected], # x_axis et y_axis ici seront les valeurs jittered
+                custom_data=["Espece_User", "Ecologie", x_axis_trait_selected, y_axis_trait_selected], 
                 template="plotly_dark", height=600, color_discrete_sequence=COLOR_SEQUENCE
             )
             
-            # MODIFICATION: Taille du texte et hovertemplate simplifié
             fig_interactive_scatter.update_traces(
                 textposition="top center", 
                 marker=dict(opacity=0.8, size=8),
-                textfont=dict(size=12), # Augmentation de la taille du texte de l'étiquette
+                textfont=dict(size=10), 
                 hovertemplate=(
-                    "<b>%{customdata[0]}</b><br>" + # Espece_User
-                    "<br><i>Écologie:</i><br>%{customdata[1]}<extra></extra>" # Ecologie seulement
+                    "<b>%{customdata[0]}</b><br>" + 
+                    "<br><i>Écologie:</i><br>%{customdata[1]}<extra></extra>" 
                 )
             )
-            # FIN MODIFICATION TAILLE TEXTE ET HOVERTEMPLATE
 
-            # Convex Hull basé sur les positions des points (potentiellement jittered) de plot_data_to_use
             unique_clusters_interactive = sorted(plot_data_to_use["Cluster"].unique())
             cluster_color_map_interactive = {lbl: COLOR_SEQUENCE[i % len(COLOR_SEQUENCE)] for i, lbl in enumerate(unique_clusters_interactive)}
             for cluster_label in unique_clusters_interactive:
@@ -382,11 +377,15 @@ if st.session_state.run_main_analysis_once and not sub.empty:
                                 line=dict(color=clr_int, width=1.5), mode='lines', name=f'Cluster {cluster_label} Hull', 
                                 opacity=0.2, showlegend=False, hoverinfo='skip' ))
                         except Exception as e: print(f"Hull Inter.: {cluster_label} ({x_axis_trait_selected}, {y_axis_trait_selected}): {e}")
+            
             fig_interactive_scatter.update_layout(
                 title_text=f"Variables: {y_axis_trait_selected} en fonction de {x_axis_trait_selected}", title_x=0.5,
                 xaxis_title=x_axis_trait_selected, yaxis_title=y_axis_trait_selected
             )
-            st.plotly_chart(fig_interactive_scatter, use_container_width=True)
+            # MODIFICATION: Définir le dragmode pour le graphique interactif
+            fig_interactive_scatter.update_layout(dragmode='pan')
+
+            st.plotly_chart(fig_interactive_scatter, use_container_width=True) # config={'scrollZoom': True} est généralement le défaut
         elif not (x_axis_trait_selected and y_axis_trait_selected):
             st.warning("Veuillez sélectionner des variables pour les axes X et Y.")
         elif pdf.empty or len(sub) != len(pdf) :
@@ -410,14 +409,14 @@ if st.session_state.run_main_analysis_once and not sub.empty:
     with col_cluster_comp_main:
         st.subheader("Composition des Clusters (ACP)")
         if cluster_compositions_data and any(d['count'] > 0 for d in cluster_compositions_data):
-            num_clusters_found_display = len([d for d in cluster_compositions_data if d['count']>0]) # Nombre de clusters avec au moins une espèce
+            num_clusters_found_display = len([d for d in cluster_compositions_data if d['count']>0]) 
             num_display_cols = min(num_clusters_found_display, 3) 
             
-            if num_display_cols > 0: # S'assurer qu'il y a des colonnes à créer
+            if num_display_cols > 0: 
                 cluster_cols = st.columns(num_display_cols)
                 current_col_idx = 0
                 for comp_data in cluster_compositions_data:
-                    if comp_data['count'] > 0: # Afficher seulement les clusters non vides
+                    if comp_data['count'] > 0: 
                         with cluster_cols[current_col_idx % num_display_cols]:
                             st.markdown(f"**Cluster {comp_data['cluster_label']}** ({comp_data['count']} espèces)")
                             for species_name in comp_data['species_list']: st.markdown(f"- {species_name}")
@@ -432,5 +431,5 @@ if st.session_state.run_main_analysis_once and not sub.empty:
 # ---------------------------------------------------------------------------- #
 if fig_dend: 
     st.plotly_chart(fig_dend, use_container_width=True)
-elif st.session_state.run_main_analysis_once and not sub.empty and species_binom_user_unique :
+elif st.session_state.run_main_analysis_once and not sub.empty and species_binom_user_unique:
     st.info("Le dendrogramme n'a pas pu être généré (nécessite au moins 2 espèces uniques après traitement ou problème de données pour le linkage).")
