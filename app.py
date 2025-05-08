@@ -6,6 +6,7 @@ import plotly.graph_objects as go
 from scipy.cluster.hierarchy import linkage
 from scipy.spatial import ConvexHull
 import numpy as np
+import textwrap # Importé pour la mise en forme du texte de survol
 
 # Assurez-vous que le fichier core.py est dans le même répertoire ou accessible
 import core
@@ -45,27 +46,37 @@ if not ref.empty:
     )
 
 # ---------------------------------------------------------------------------- #
-# CHARGEMENT DE LA BASE ECOLOGIQUE (MODIFIÉ)
+# FONCTION UTILITAIRE POUR FORMATER L'ÉCOLOGIE (NOUVEAU)
+# ---------------------------------------------------------------------------- #
+def format_ecology_for_hover(text, line_width_chars=65):
+    """Formate le texte pour l'affichage dans le survol Plotly avec des retours à la ligne."""
+    if pd.isna(text) or text.strip() == "":
+        return "Description écologique non disponible."
+    # Utilise textwrap pour couper le texte à la largeur spécifiée
+    wrapped_lines = textwrap.wrap(text, width=line_width_chars)
+    # Joint les lignes avec des balises <br> pour l'HTML
+    return "<br>".join(wrapped_lines)
+
+# ---------------------------------------------------------------------------- #
+# CHARGEMENT DE LA BASE ECOLOGIQUE
 # ---------------------------------------------------------------------------- #
 @st.cache_data
-def load_ecology_data(file_path="data_ecologie_espece.csv"): # Assurez-vous que ce nom de fichier correspond à celui sur votre dépôt
+def load_ecology_data(file_path="data_ecologie_espece.csv"):
     """Charge les données écologiques à partir du chemin spécifié."""
     try:
-        # MODIFIÉ: Utilisation de sep=';' pour les fichiers CSV séparés par des points-virgules
         eco_data = pd.read_csv(
             file_path, 
-            sep=';',  # Correction du séparateur
+            sep=';',
             header=None, 
             usecols=[0, 1], 
             names=['Espece', 'Description_Ecologie'], 
-            encoding='utf-8-sig' # Utiliser utf-8-sig pour gérer correctement le BOM
+            encoding='utf-8-sig'
         )
         
-        # Normalise les noms d'espèces: deux premiers mots, minuscules
         eco_data['Espece_norm'] = (
             eco_data['Espece']
             .astype(str) 
-            .str.strip() # Enlever les espaces superflus avant et après
+            .str.strip()
             .str.split()
             .str[:2]
             .str.join(" ")
@@ -76,21 +87,21 @@ def load_ecology_data(file_path="data_ecologie_espece.csv"): # Assurez-vous que 
         
         return eco_data[["Description_Ecologie"]]
     except FileNotFoundError:
-        st.warning(f"Fichier de données écologiques '{file_path}' non trouvé. Veuillez vérifier le nom et l'emplacement du fichier. Les descriptions écologiques ne seront pas disponibles.")
+        # MODIFIÉ: Plus de st.sidebar.warning, le message sera dans la console ou un st.warning global si critique
+        print(f"AVERTISSEMENT: Fichier de données écologiques '{file_path}' non trouvé.")
+        st.toast(f"Fichier écologique '{file_path}' non trouvé.", icon="⚠️")
         return pd.DataFrame()
     except ValueError as ve:
-        st.warning(f"Erreur de valeur lors de la lecture du fichier '{file_path}'. Vérifiez que le fichier est bien séparé par des points-virgules et a deux colonnes. Détails: {ve}. Les descriptions écologiques ne seront pas disponibles.")
+        print(f"AVERTISSEMENT: Erreur de valeur lors de la lecture du fichier '{file_path}'. Détails: {ve}.")
+        st.toast(f"Erreur format fichier écologique '{file_path}'.", icon="🔥")
         return pd.DataFrame()
     except Exception as e:
-        st.warning(f"Impossible de charger les données écologiques depuis '{file_path}': {e}. Les descriptions écologiques ne seront pas disponibles.")
+        print(f"AVERTISSEMENT: Impossible de charger les données écologiques depuis '{file_path}': {e}.")
+        st.toast(f"Erreur chargement fichier écologique.", icon="🔥")
         return pd.DataFrame()
 
 ecology_df = load_ecology_data()
-if ecology_df.empty:
-    st.sidebar.warning("Les données écologiques n'ont pas pu être chargées. Vérifiez les messages d'erreur ci-dessus et le format de votre fichier `data_ecologie_espece.csv`.")
-else:
-    st.sidebar.success(f"{len(ecology_df)} descriptions écologiques chargées avec succès.")
-
+# MODIFIÉ: Suppression des messages st.sidebar.warning et st.sidebar.success
 
 # ---------------------------------------------------------------------------- #
 # LAYOUT DE LA PAGE
@@ -199,10 +210,14 @@ if run and not ref.empty:
                 .str.join(" ")
                 .str.lower()
             )
-            pdf['Ecologie'] = pdf['Espece_Ref_norm_for_eco'].map(ecology_df['Description_Ecologie'])
-            pdf['Ecologie'] = pdf['Ecologie'].fillna("Description écologique non disponible.")
+            # Récupère la description brute
+            pdf['Ecologie_raw'] = pdf['Espece_Ref_norm_for_eco'].map(ecology_df['Description_Ecologie'])
+            # MODIFIÉ: Applique le formatage pour le survol
+            pdf['Ecologie'] = pdf['Ecologie_raw'].apply(lambda x: format_ecology_for_hover(x, line_width_chars=65))
+            pdf['Ecologie'] = pdf['Ecologie'].fillna(format_ecology_for_hover("Description écologique non disponible.")) # S'assurer que le message par défaut est aussi formaté
         else:
-            pdf['Ecologie'] = "Description écologique non disponible (fichier non chargé ou vide)."
+            pdf['Ecologie'] = format_ecology_for_hover("Description écologique non disponible (fichier non chargé ou vide).")
+
 
         color_sequence = px.colors.qualitative.Plotly 
         
@@ -224,7 +239,7 @@ if run and not ref.empty:
             marker=dict(opacity=0.7),
             hovertemplate=(
                 "<b>%{customdata[0]}</b><br>" + 
-                "<br><i>Écologie:</i><br>%{customdata[1]}" + 
+                "<br><i>Écologie:</i><br>%{customdata[1]}" + # %{customdata[1]} contiendra maintenant le texte avec des <br>
                 "<extra></extra>" 
             )
         )
@@ -257,9 +272,10 @@ if run and not ref.empty:
                             hoverinfo='skip'
                         ))
                     except Exception as e_hull:
-                        st.sidebar.warning(f"Impossible de générer l'enveloppe convexe pour le cluster {cluster_label}: {e_hull}")
+                        # Message discret si l'enveloppe ne peut être générée
+                        print(f"Note: Impossible de générer l'enveloppe convexe pour le cluster {cluster_label}: {e_hull}")
                 elif len(unique_cluster_points) > 0:
-                     st.sidebar.info(f"Cluster {cluster_label}: pas assez de points uniques ({len(unique_cluster_points)}) pour l'enveloppe (min {min_points_for_hull}).")
+                     print(f"Note: Cluster {cluster_label}: pas assez de points uniques ({len(unique_cluster_points)}) pour l'enveloppe (min {min_points_for_hull}).")
 
 
         fig_pca.update_layout(
