@@ -45,44 +45,52 @@ if not ref.empty:
     )
 
 # ---------------------------------------------------------------------------- #
-# NOUVEAU: CHARGEMENT DE LA BASE ECOLOGIQUE (MODIFIÉ)
+# CHARGEMENT DE LA BASE ECOLOGIQUE (MODIFIÉ)
 # ---------------------------------------------------------------------------- #
 @st.cache_data
-def load_ecology_data(file_path="data_ecologie_espece.csv"):
+def load_ecology_data(file_path="data_ecologie_espece.csv"): # Assurez-vous que ce nom de fichier correspond à celui sur votre dépôt
     """Charge les données écologiques à partir du chemin spécifié."""
     try:
-        # MODIFIÉ: Utilisation de sep='\t' pour les fichiers TSV (Tab Separated Values)
-        # MODIFIÉ: Ajout de header=None car le fichier semble ne pas avoir d'en-tête
-        # MODIFIÉ: Assignation explicite des noms de colonnes
-        eco_data = pd.read_csv(file_path, sep='\t', header=None, usecols=[0, 1], names=['Espece', 'Description_Ecologie'], encoding='utf-8')
+        # MODIFIÉ: Utilisation de sep=';' pour les fichiers CSV séparés par des points-virgules
+        eco_data = pd.read_csv(
+            file_path, 
+            sep=';',  # Correction du séparateur
+            header=None, 
+            usecols=[0, 1], 
+            names=['Espece', 'Description_Ecologie'], 
+            encoding='utf-8-sig' # Utiliser utf-8-sig pour gérer correctement le BOM
+        )
         
         # Normalise les noms d'espèces: deux premiers mots, minuscules
         eco_data['Espece_norm'] = (
             eco_data['Espece']
-            .astype(str) # S'assurer que c'est une chaîne
+            .astype(str) 
+            .str.strip() # Enlever les espaces superflus avant et après
             .str.split()
             .str[:2]
             .str.join(" ")
             .str.lower()
         )
-        # Vérifier s'il y a des doublons dans Espece_norm et les gérer si nécessaire
-        # Pour cet exemple, nous gardons la première occurrence en cas de doublons après normalisation.
         eco_data = eco_data.drop_duplicates(subset=['Espece_norm'], keep='first')
         eco_data = eco_data.set_index('Espece_norm')
         
-        # Retourne uniquement la colonne de description, indexée par le nom normalisé
         return eco_data[["Description_Ecologie"]]
     except FileNotFoundError:
-        st.warning(f"Fichier de données écologiques '{file_path}' non trouvé. Les descriptions écologiques ne seront pas disponibles.")
+        st.warning(f"Fichier de données écologiques '{file_path}' non trouvé. Veuillez vérifier le nom et l'emplacement du fichier. Les descriptions écologiques ne seront pas disponibles.")
         return pd.DataFrame()
     except ValueError as ve:
-        st.warning(f"Erreur de valeur lors de la lecture du fichier '{file_path}'. Vérifiez que le fichier a bien deux colonnes et est au format TSV attendu. Détails: {ve}. Les descriptions écologiques ne seront pas disponibles.")
+        st.warning(f"Erreur de valeur lors de la lecture du fichier '{file_path}'. Vérifiez que le fichier est bien séparé par des points-virgules et a deux colonnes. Détails: {ve}. Les descriptions écologiques ne seront pas disponibles.")
         return pd.DataFrame()
     except Exception as e:
         st.warning(f"Impossible de charger les données écologiques depuis '{file_path}': {e}. Les descriptions écologiques ne seront pas disponibles.")
         return pd.DataFrame()
 
 ecology_df = load_ecology_data()
+if ecology_df.empty:
+    st.sidebar.warning("Les données écologiques n'ont pas pu être chargées. Vérifiez les messages d'erreur ci-dessus et le format de votre fichier `data_ecologie_espece.csv`.")
+else:
+    st.sidebar.success(f"{len(ecology_df)} descriptions écologiques chargées avec succès.")
+
 
 # ---------------------------------------------------------------------------- #
 # LAYOUT DE LA PAGE
@@ -185,6 +193,7 @@ if run and not ref.empty:
             pdf['Espece_Ref_norm_for_eco'] = (
                 pdf['Espece_Ref']
                 .astype(str)
+                .str.strip() 
                 .str.split()
                 .str[:2]
                 .str.join(" ")
@@ -192,14 +201,11 @@ if run and not ref.empty:
             )
             pdf['Ecologie'] = pdf['Espece_Ref_norm_for_eco'].map(ecology_df['Description_Ecologie'])
             pdf['Ecologie'] = pdf['Ecologie'].fillna("Description écologique non disponible.")
-            # Optionnel: supprimer la colonne temporaire
-            # pdf = pdf.drop(columns=['Espece_Ref_norm_for_eco']) 
         else:
             pdf['Ecologie'] = "Description écologique non disponible (fichier non chargé ou vide)."
 
         color_sequence = px.colors.qualitative.Plotly 
         
-        # MODIFIÉ: custom_data pour l'affichage de l'écologie
         fig_pca = px.scatter(
             pdf,
             x="PC1",
@@ -207,19 +213,18 @@ if run and not ref.empty:
             color="Cluster",
             text="Espece_User", 
             hover_name="Espece_User", 
-            custom_data=["Espece_User", "Ecologie"], # MODIFIÉ: Seulement Espece_User et Ecologie
+            custom_data=["Espece_User", "Ecologie"], 
             template="plotly_dark",
             height=600,
             color_discrete_sequence=color_sequence
         )
 
-        # MODIFIÉ: Mise à jour de hovertemplate pour inclure uniquement l'espèce et l'écologie
         fig_pca.update_traces(
             textposition="top center",
             marker=dict(opacity=0.7),
             hovertemplate=(
-                "<b>%{customdata[0]}</b><br>" + # Espece_User
-                "<br><i>Écologie:</i><br>%{customdata[1]}" + # Description écologique
+                "<b>%{customdata[0]}</b><br>" + 
+                "<br><i>Écologie:</i><br>%{customdata[1]}" + 
                 "<extra></extra>" 
             )
         )
