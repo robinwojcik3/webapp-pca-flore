@@ -18,22 +18,14 @@ st.set_page_config(page_title="PCA flore interactive", layout="wide")
 st.markdown("<h1 style='text-align: center;'>Analyse interactive des clusters botaniques</h1>", unsafe_allow_html=True)
 
 # CSS pour la taille de police du data_editor (tentative)
-# Le ciblage précis peut dépendre de la version de Streamlit.
-# st.data_editor utilise Glide Data Grid, qui rend dans un canvas.
-# Un contrôle total de la police est difficile sans JS.
-# Cette CSS cible les en-têtes et tente d'influencer le reste.
 st.markdown("""
 <style>
 div[data-testid="stDataEditor"] {
-    font-size: 14px; /* Tentative pour la police générale du conteneur */
+    font-size: 14px; 
 }
-div[data-testid="stDataEditor"] .glideDataEditor-header { /* Pour les en-têtes de colonnes */
-    font-size: 15px !important; /* Augmenter la taille des en-têtes */
+div[data-testid="stDataEditor"] .glideDataEditor-header { 
+    font-size: 15px !important; 
 }
-/* Streamlit peut utiliser des classes spécifiques pour les cellules,
-   mais le rendu sur canvas limite la portée du CSS direct sur le contenu des cellules.
-   Cette règle est plus pour les éléments HTML autour de la grille.
-*/
 div[data-testid="stDataEditor"] table, 
 div[data-testid="stDataEditor"] th, 
 div[data-testid="stDataEditor"] td {
@@ -48,7 +40,7 @@ div[data-testid="stDataEditor"] td {
 # ---------------------------------------------------------------------------- #
 MIN_POINTS_FOR_HULL = 3
 COLOR_SEQUENCE = px.colors.qualitative.Plotly
-LABEL_FONT_SIZE_ON_PLOTS = 13 # Nouvelle constante pour la taille des labels d'espèces
+LABEL_FONT_SIZE_ON_PLOTS = 13 
 
 @st.cache_data
 def load_data(file_path="data_ref.csv"):
@@ -138,6 +130,11 @@ if 'run_main_analysis_once' not in st.session_state:
     st.session_state.run_main_analysis_once = False
 if 'vip_data_df_interactive' not in st.session_state: 
     st.session_state.vip_data_df_interactive = pd.DataFrame()
+if 'numeric_trait_names_for_interactive_plot' not in st.session_state:
+    st.session_state.numeric_trait_names_for_interactive_plot = []
+if 'vip_data_df_for_calc' not in st.session_state:
+    st.session_state.vip_data_df_for_calc = pd.DataFrame()
+
 
 # ---------------------------------------------------------------------------- #
 # SECTION 1: ENTRÉES UTILISATEUR ET GRAPHIQUE ACP
@@ -159,12 +156,12 @@ with col_input_user:
 
 fig_pca = None
 fig_dend = None
-vip_data_df_for_calc = pd.DataFrame()
+# vip_data_df_for_calc est maintenant dans session_state
 cluster_compositions_data = []
 sub = pd.DataFrame()
 pdf = pd.DataFrame()
 X_for_dendro = np.array([])
-numeric_trait_names_for_interactive_plot = []
+# numeric_trait_names_for_interactive_plot est maintenant dans session_state
 
 
 # ---------------------------------------------------------------------------- #
@@ -204,7 +201,7 @@ if run_main_analysis_button and not ref.empty:
         st.error("Aucune des espèces saisies (après déduplication et recherche dans la base de traits) n'a pu être utilisée pour l'analyse.")
         st.session_state.run_main_analysis_once = False; st.stop()
     if sub.shape[0] < n_clusters_selected and n_clusters_selected > 0 :
-        st.error(f"Le nombre d'espèces uniques trouvées et utilisées ({sub.shape[0]}) est inférieur au nombre de clusters demandé ({n_clusters_selected}).");
+        st.error(f"Le nombre d'espèces uniques trouvées et utilis_x_axis_trait_interactiveées ({sub.shape[0]}) est inférieur au nombre de clusters demandé ({n_clusters_selected}).");
         st.session_state.run_main_analysis_once = False; st.stop()
     if sub.shape[0] < 2:
         st.error(f"Au moins 2 espèces uniques sont nécessaires pour l'analyse. {sub.shape[0]} espèce(s) trouvée(s) et utilisée(s).");
@@ -268,13 +265,14 @@ if run_main_analysis_button and not ref.empty:
         st.session_state.x_axis_trait_interactive = default_x_init
         st.session_state.y_axis_trait_interactive = default_y_init
         
+        # Préparer st.session_state.vip_data_df_interactive basé sur les sélections par défaut
         if not st.session_state.vip_data_df_for_calc.empty and numeric_trait_names_init:
-            temp_interactive_df = st.session_state.vip_data_df_for_calc[
+            interactive_df_init = st.session_state.vip_data_df_for_calc[
                 st.session_state.vip_data_df_for_calc["Variable"].isin(numeric_trait_names_init)
             ].copy()
-            temp_interactive_df["Axe X"] = temp_interactive_df["Variable"] == st.session_state.x_axis_trait_interactive
-            temp_interactive_df["Axe Y"] = temp_interactive_df["Variable"] == st.session_state.y_axis_trait_interactive
-            st.session_state.vip_data_df_interactive = temp_interactive_df[["Variable", "Communalité (%)", "Axe X", "Axe Y"]].reset_index(drop=True)
+            interactive_df_init["Axe X"] = (interactive_df_init["Variable"] == st.session_state.x_axis_trait_interactive)
+            interactive_df_init["Axe Y"] = (interactive_df_init["Variable"] == st.session_state.y_axis_trait_interactive)
+            st.session_state.vip_data_df_interactive = interactive_df_init[["Variable", "Communalité (%)", "Axe X", "Axe Y"]].reset_index(drop=True)
         else:
             st.session_state.vip_data_df_interactive = pd.DataFrame(columns=["Variable", "Communalité (%)", "Axe X", "Axe Y"])
 
@@ -282,6 +280,7 @@ if run_main_analysis_button and not ref.empty:
         st.error(f"Une erreur est survenue lors de l'analyse ACP : {e}"); st.exception(e)
         st.session_state.run_main_analysis_once = False; st.stop()
 
+# Recharger les données depuis session_state si l'analyse a déjà été lancée
 if st.session_state.run_main_analysis_once:
     sub = st.session_state.get('sub', pd.DataFrame())
     pdf = st.session_state.get('pdf', pd.DataFrame())
@@ -296,7 +295,7 @@ if st.session_state.run_main_analysis_once:
                              color_discrete_sequence=COLOR_SEQUENCE)
         fig_pca.update_traces(textposition="top center", marker=dict(opacity=0.7), 
                               hovertemplate=("<b>%{customdata[0]}</b><br><br><i>Écologie:</i><br>%{customdata[1]}<extra></extra>"),
-                              textfont=dict(size=LABEL_FONT_SIZE_ON_PLOTS)) # Taille de police des labels
+                              textfont=dict(size=LABEL_FONT_SIZE_ON_PLOTS)) 
         unique_clusters_pca = sorted(pdf["Cluster"].unique())
         cluster_color_map_pca = {lbl: COLOR_SEQUENCE[i % len(COLOR_SEQUENCE)] for i, lbl in enumerate(unique_clusters_pca)}
         
@@ -357,70 +356,75 @@ if st.session_state.run_main_analysis_once and not sub.empty:
 
     with col_interactive_table:
         st.markdown("##### Tableau d'exploration interactif des variables")
-        df_editor_source = st.session_state.get('vip_data_df_interactive', pd.DataFrame(columns=["Variable", "Communalité (%)", "Axe X", "Axe Y"]))
+        # Utiliser une copie pour éviter les modifications par référence inattendues avec data_editor
+        df_editor_source = st.session_state.get('vip_data_df_interactive', pd.DataFrame()).copy()
 
         if not df_editor_source.empty:
             edited_df = st.data_editor(
-                df_editor_source,
+                df_editor_source, # Utiliser la copie
                 column_config={
                     "Variable": st.column_config.TextColumn("Variable", disabled=True, help="Nom de la variable (trait)"),
                     "Communalité (%)": st.column_config.NumberColumn("Communalité (%)", format="%d%%", disabled=True, help="Communalité de la variable dans l'ACP"),
                     "Axe X": st.column_config.CheckboxColumn("Axe X", help="Sélectionner cette variable pour l'axe X du graphique d'exploration"),
                     "Axe Y": st.column_config.CheckboxColumn("Axe Y", help="Sélectionner cette variable pour l'axe Y du graphique d'exploration")
                 },
-                key="interactive_exploration_editor",
+                key="interactive_exploration_editor", # Clé unique pour le widget
                 use_container_width=True,
                 hide_index=True,
-                num_rows="fixed" # Pour éviter l'ajout/suppression de lignes
+                num_rows="fixed" 
             )
 
-            prev_x_selected = st.session_state.x_axis_trait_interactive
-            prev_y_selected = st.session_state.y_axis_trait_interactive
-
-            current_x_selections_editor = edited_df[edited_df["Axe X"]]["Variable"].tolist()
-            current_y_selections_editor = edited_df[edited_df["Axe Y"]]["Variable"].tolist()
+            # Logique pour la sélection exclusive (comportement radio)
+            # Cette logique s'exécute après que l'utilisateur a interagi avec l'éditeur
             
-            new_x_trait = None
-            if current_x_selections_editor:
-                new_x_trait = current_x_selections_editor[-1] # Prendre la dernière cochée si plusieurs (ne devrait pas arriver après rerun)
+            # Variables sélectionnées dans l'interface utilisateur de l'éditeur
+            x_vars_selected_in_editor = edited_df[edited_df["Axe X"]]["Variable"].tolist()
+            y_vars_selected_in_editor = edited_df[edited_df["Axe Y"]]["Variable"].tolist()
+
+            # Déterminer la variable finale pour l'axe X
+            # Si plusieurs sont cochées par l'utilisateur, prendre la dernière de la liste (dernière action)
+            # Si aucune n'est cochée, la sélection devient None
+            final_x_trait = x_vars_selected_in_editor[-1] if x_vars_selected_in_editor else None
             
-            new_y_trait = None
-            if current_y_selections_editor:
-                new_y_trait = current_y_selections_editor[-1]
+            # Déterminer la variable finale pour l'axe Y
+            final_y_trait = y_vars_selected_in_editor[-1] if y_vars_selected_in_editor else None
 
-            # Vérifier si les sélections ont changé et nécessitent une mise à jour + rerun
-            changed_x = (new_x_trait != prev_x_selected)
-            changed_y = (new_y_trait != prev_y_selected)
+            # Vérifier si les sélections effectives ont changé par rapport à l'état de session
+            x_selection_changed = (final_x_trait != st.session_state.x_axis_trait_interactive)
+            y_selection_changed = (final_y_trait != st.session_state.y_axis_trait_interactive)
 
-            # Vérifier si l'état de l'éditeur a plus d'une sélection (ce qui indiquerait que le rerun n'a pas encore corrigé)
-            dirty_x = len(current_x_selections_editor) > 1
-            dirty_y = len(current_y_selections_editor) > 1
+            # Vérifier si l'état de l'éditeur lui-même n'est pas "propre" 
+            # (c.-à-d. s'il affiche plus d'une sélection, ce qui peut arriver avant le rerun)
+            editor_state_dirty_x = len(x_vars_selected_in_editor) > 1
+            editor_state_dirty_y = len(y_vars_selected_in_editor) > 1
+            
+            # Si une sélection a changé OU si l'éditeur montre un état "sale",
+            # il faut mettre à jour l'état de session et reconstruire le DataFrame source pour l'éditeur.
+            if x_selection_changed or y_selection_changed or editor_state_dirty_x or editor_state_dirty_y:
+                st.session_state.x_axis_trait_interactive = final_x_trait
+                st.session_state.y_axis_trait_interactive = final_y_trait
 
-            if changed_x or changed_y or dirty_x or dirty_y:
-                st.session_state.x_axis_trait_interactive = new_x_trait
-                st.session_state.y_axis_trait_interactive = new_y_trait
+                # Reconstruire le DataFrame source pour data_editor pour garantir l'affichage d'une seule sélection (ou aucune)
+                # Utiliser le DataFrame de base (vip_data_df_for_calc filtré pour les traits numériques)
+                # pour assurer que toutes les variables numériques sont toujours présentes dans le tableau.
+                
+                numeric_vars = st.session_state.get('numeric_trait_names_for_interactive_plot', [])
+                base_df_for_interactive_table = st.session_state.get('vip_data_df_for_calc', pd.DataFrame())
 
-                # Reconstruire le DataFrame source pour data_editor pour garantir une seule sélection
-                df_for_editor_update = st.session_state.get('vip_data_df_interactive', pd.DataFrame()).copy() # Partir de la version en session
-                if not df_for_editor_update.empty:
-                    # S'assurer que la colonne "Variable" est bien l'index pour une comparaison facile ou utiliser .loc
-                    df_for_editor_update.set_index("Variable", inplace=True, drop=False)
-                    
-                    # Tout décocher d'abord
-                    df_for_editor_update["Axe X"] = False
-                    df_for_editor_update["Axe Y"] = False
-
-                    # Cocher la sélection actuelle pour X
-                    if st.session_state.x_axis_trait_interactive in df_for_editor_update.index:
-                        df_for_editor_update.loc[st.session_state.x_axis_trait_interactive, "Axe X"] = True
-                    
-                    # Cocher la sélection actuelle pour Y
-                    if st.session_state.y_axis_trait_interactive in df_for_editor_update.index:
-                        df_for_editor_update.loc[st.session_state.y_axis_trait_interactive, "Axe Y"] = True
-                    
-                    # Réinitialiser l'index pour correspondre à la structure attendue par st.data_editor
-                    st.session_state.vip_data_df_interactive = df_for_editor_update.reset_index(drop=True)[["Variable", "Communalité (%)", "Axe X", "Axe Y"]]
-                st.rerun()
+                if not base_df_for_interactive_table.empty and numeric_vars:
+                    interactive_df_rebuilt = base_df_for_interactive_table[
+                        base_df_for_interactive_table["Variable"].isin(numeric_vars)
+                    ].copy()
+                    # Appliquer les sélections uniques actuelles
+                    interactive_df_rebuilt["Axe X"] = (interactive_df_rebuilt["Variable"] == st.session_state.x_axis_trait_interactive)
+                    interactive_df_rebuilt["Axe Y"] = (interactive_df_rebuilt["Variable"] == st.session_state.y_axis_trait_interactive)
+                    # S'assurer que l'ordre des colonnes est correct et réinitialiser l'index
+                    st.session_state.vip_data_df_interactive = interactive_df_rebuilt[["Variable", "Communalité (%)", "Axe X", "Axe Y"]].reset_index(drop=True)
+                else:
+                    # Fallback si les données de base ne sont pas prêtes (ne devrait pas se produire si df_editor_source n'était pas vide)
+                    st.session_state.vip_data_df_interactive = pd.DataFrame(columns=["Variable", "Communalité (%)", "Axe X", "Axe Y"])
+                
+                st.rerun() # Rafraîchir l'application pour refléter les changements
         else:
             st.info("Le tableau d'exploration sera disponible après l'analyse si des traits numériques sont identifiés.")
 
@@ -429,7 +433,7 @@ if st.session_state.run_main_analysis_once and not sub.empty:
         x_axis_trait_selected_for_plot = st.session_state.x_axis_trait_interactive
         y_axis_trait_selected_for_plot = st.session_state.y_axis_trait_interactive
 
-        if not numeric_trait_names_for_interactive_plot:
+        if not numeric_trait_names_for_interactive_plot: # Utiliser la variable de session
              st.warning("Aucun trait numérique trouvé pour l'exploration interactive.")
         elif not x_axis_trait_selected_for_plot or not y_axis_trait_selected_for_plot:
             st.info("Veuillez sélectionner une variable pour l'Axe X et une pour l'Axe Y dans le tableau à gauche.")
@@ -488,7 +492,6 @@ if st.session_state.run_main_analysis_once and not sub.empty:
             fig_interactive_scatter = px.scatter(
                 plot_data_to_use, x=x_axis_trait_selected_for_plot, y=y_axis_trait_selected_for_plot,
                 color="Cluster", text="Espece_User", hover_name="Espece_User",
-                # custom_data ne contiendra plus les valeurs des axes car non utilisées dans le hovertemplate modifié
                 custom_data=["Espece_User", "Ecologie"], 
                 template="plotly_dark", height=600, color_discrete_sequence=COLOR_SEQUENCE
             )
@@ -496,10 +499,10 @@ if st.session_state.run_main_analysis_once and not sub.empty:
             fig_interactive_scatter.update_traces(
                 textposition="top center", 
                 marker=dict(opacity=0.8, size=8),
-                textfont=dict(size=LABEL_FONT_SIZE_ON_PLOTS), # Taille de police des labels
-                hovertemplate=( # Hovertemplate modifié
-                    "<b>%{customdata[0]}</b><br>" +  # Nom de l'espèce
-                    "<br><i>Écologie:</i><br>%{customdata[1]}" + # Écologie
+                textfont=dict(size=LABEL_FONT_SIZE_ON_PLOTS), 
+                hovertemplate=( 
+                    "<b>%{customdata[0]}</b><br>" +  
+                    "<br><i>Écologie:</i><br>%{customdata[1]}" + 
                     "<extra></extra>" 
                 )
             )
