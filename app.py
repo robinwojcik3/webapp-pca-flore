@@ -302,7 +302,31 @@ if 'releves_df' not in st.session_state or not isinstance(st.session_state.relev
 st.markdown("---")
 st.subheader("Étape 1: Importation et Sélection des Relevés Floristiques")
 
-current_releves_df_for_selection = st.session_state.releves_df.copy()
+st.info("Copiez-collez vos données de relevés ci-dessus (Ctrl+V ou Cmd+V). La première ligne doit contenir les noms des habitats/relevés. Les lignes suivantes contiennent les espèces.")
+
+if not all(isinstance(col, str) for col in st.session_state.releves_df.columns):
+    st.session_state.releves_df.columns = [str(col) for col in st.session_state.releves_df.columns]
+
+edited_releves_df_from_editor = st.data_editor(
+    st.session_state.releves_df,
+    num_rows="dynamic",
+    use_container_width=True,
+    key="releves_data_editor_key" 
+)
+
+if not edited_releves_df_from_editor.equals(st.session_state.releves_df):
+    st.session_state.releves_df = edited_releves_df_from_editor.copy()
+    if len(st.session_state.releves_df.columns) != st.session_state.previous_num_cols:
+        if st.session_state.selected_habitats_indices is not None and \
+           st.session_state.selected_habitats_indices >= len(st.session_state.releves_df.columns):
+            st.session_state.selected_habitats_indices = None
+            st.session_state.analysis_has_run_for_current_selection = False
+            st.session_state.run_main_analysis_once = False 
+        st.session_state.previous_num_cols = len(st.session_state.releves_df.columns)
+    st.rerun()
+
+# --- Sélection des Habitats (sous le data_editor) ---
+current_releves_df_for_selection = st.session_state.releves_df.copy() # Utiliser la version potentiellement éditée
 
 if not current_releves_df_for_selection.empty and \
    len(current_releves_df_for_selection.columns) > 0 and \
@@ -326,15 +350,16 @@ if not current_releves_df_for_selection.empty and \
             is_selected = (st.session_state.selected_habitats_indices == i)
             
             button_type = "primary" if is_selected else "secondary"
-            button_key = f"habitat_select_button_{i}"
+            button_key = f"habitat_select_button_{i}" # Clé unique pour chaque bouton
 
             with button_cols_layout[i]:
                 st.markdown(f'<div class="habitat-select-button">', unsafe_allow_html=True)
                 if st.button(habitat_name_for_button, key=button_key, type=button_type, use_container_width=True):
-                    if st.session_state.selected_habitats_indices != i:
+                    if st.session_state.selected_habitats_indices != i: # Si on clique sur un nouveau bouton
                         st.session_state.selected_habitats_indices = i
-                        st.session_state.run_main_analysis_once = False 
-                        st.session_state.analysis_has_run_for_current_selection = False 
+                        st.session_state.run_main_analysis_once = False # Indiquer qu'une nouvelle analyse est nécessaire
+                        st.session_state.analysis_has_run_for_current_selection = False # Forcer la relance de l'analyse
+                    # Si on clique sur le même bouton déjà sélectionné, on ne change rien (pas de désélection)
                     st.rerun()
                 st.markdown('</div>', unsafe_allow_html=True)
     else:
@@ -342,28 +367,6 @@ if not current_releves_df_for_selection.empty and \
 else:
     st.warning("Le tableau de données est vide ou ne contient pas de colonnes pour la sélection.")
 
-st.info("Copiez-collez vos données de relevés ici (Ctrl+V ou Cmd+V). La première ligne doit contenir les noms des habitats/relevés. Les lignes suivantes contiennent les espèces.")
-
-if not all(isinstance(col, str) for col in st.session_state.releves_df.columns):
-    st.session_state.releves_df.columns = [str(col) for col in st.session_state.releves_df.columns]
-
-edited_releves_df_from_editor = st.data_editor(
-    st.session_state.releves_df,
-    num_rows="dynamic",
-    use_container_width=True,
-    key="releves_data_editor_key" 
-)
-
-if not edited_releves_df_from_editor.equals(st.session_state.releves_df):
-    st.session_state.releves_df = edited_releves_df_from_editor.copy()
-    if len(st.session_state.releves_df.columns) != st.session_state.previous_num_cols:
-        if st.session_state.selected_habitats_indices is not None and \
-           st.session_state.selected_habitats_indices >= len(st.session_state.releves_df.columns):
-            st.session_state.selected_habitats_indices = None
-            st.session_state.analysis_has_run_for_current_selection = False
-            st.session_state.run_main_analysis_once = False 
-        st.session_state.previous_num_cols = len(st.session_state.releves_df.columns)
-    st.rerun()
 
 fig_pca = None
 fig_dend = None
@@ -473,16 +476,14 @@ if selected_habitat_idx_for_analysis is not None and \
 
                         if st.session_state.run_main_analysis_once: 
                             current_pdf = coords_df.copy()
-                            # S'assurer que current_pdf (coords_df) n'est pas vide avant de continuer
                             if not current_pdf.empty:
                                 if len(labels) == len(current_pdf): current_pdf["Cluster"] = labels.astype(str)
                                 else: current_pdf["Cluster"] = np.zeros(len(current_pdf)).astype(str) if len(current_pdf) > 0 else pd.Series(dtype=str)
                                 
                                 if 'Espece' in st.session_state.sub.columns:
-                                    # S'assurer que l'index de sub correspond à celui de current_pdf si ce dernier a été créé à partir de sub.index
                                     if current_pdf.index.equals(st.session_state.sub.index):
                                         current_pdf["Espece_Ref"] = st.session_state.sub["Espece"]
-                                    else: # Fallback si les index ne correspondent pas (moins probable avec la correction de coords_df)
+                                    else: 
                                         current_pdf["Espece_Ref"] = st.session_state.sub["Espece"].values[:len(current_pdf)]
 
                                     current_pdf["Espece_User"] = current_pdf["Espece_Ref"].apply(lambda full_ref_name: user_input_binom_to_raw_map.get(" ".join(str(full_ref_name).split()[:2]).lower(),str(full_ref_name)))
@@ -506,18 +507,15 @@ if selected_habitat_idx_for_analysis is not None and \
                                    isinstance(pca_results.components_, np.ndarray) and isinstance(pca_results.explained_variance_, np.ndarray) and \
                                    pca_results.components_.size > 0 and pca_results.explained_variance_.size > 0 :
                                     
-                                    pca_components_values = pca_results.components_ # (n_components, n_features)
-                                    explained_variance_values = pca_results.explained_variance_ # (n_components,)
+                                    pca_components_values = pca_results.components_ 
+                                    explained_variance_values = pca_results.explained_variance_ 
                                    
-                                    # Correction du calcul des loadings:
-                                    eigenvectors_matrix = pca_components_values.T # Forme (n_features, n_components)
-                                    sqrt_eigenvalues_vector = np.sqrt(explained_variance_values) # Forme (n_components,)
+                                    eigenvectors_matrix = pca_components_values.T 
+                                    sqrt_eigenvalues_vector = np.sqrt(explained_variance_values) 
                                     
-                                    # Broadcasting: (n_features, n_components) * (n_components,)
-                                    # Ceci met à l'échelle chaque colonne de eigenvectors_matrix par la sqrt_eigenvalue correspondante
                                     loadings = eigenvectors_matrix * sqrt_eigenvalues_vector
                                                                         
-                                    communal = (loadings**2).sum(axis=1) # Somme sur les composantes pour chaque variable
+                                    communal = (loadings**2).sum(axis=1) 
                                     
                                     trait_columns_for_communal = st.session_state.sub.select_dtypes(include=np.number).columns.tolist()
                                     
@@ -569,7 +567,7 @@ if selected_habitat_idx_for_analysis is not None and \
                                 st.session_state.vip_data_df_interactive_snapshot_for_comparison = st.session_state.vip_data_df_interactive.copy()
                             else: 
                                 st.warning("L'analyse n'a pas produit de coordonnées PCA (coords_df vide ou invalide).")
-                                st.session_state.run_main_analysis_once = False # Réinitialiser si coords_df est vide
+                                st.session_state.run_main_analysis_once = False 
                                 st.session_state.analysis_has_run_for_current_selection = False
                 except Exception as e:
                     st.error(f"Erreur lors de l'analyse principale : {e}"); st.exception(e)
@@ -582,10 +580,10 @@ elif ref.empty:
 
 
 # ---------------------------------------------------------------------------- #
-# ÉTAPE 2: EXPLORATION INTERACTIVE DES VARIABLES
+# ÉTAPE 2: EXPLORATION INTERACTIVE DES VARIABLES ET PARAM ACP
 # ---------------------------------------------------------------------------- #
 if st.session_state.run_main_analysis_once and not st.session_state.get('sub', pd.DataFrame()).empty:
-    st.markdown("---"); st.subheader("Étape 2: Exploration Interactive des Variables")
+    st.markdown("---"); st.subheader("Étape 2: Exploration Interactive et Paramètres ACP")
     col_interactive_table, col_interactive_graph = st.columns([1, 2]) 
 
     with col_interactive_table:
@@ -652,7 +650,24 @@ if st.session_state.run_main_analysis_once and not st.session_state.get('sub', p
                 st.rerun()
             elif not edited_df_interactive.equals(st.session_state.vip_data_df_interactive_snapshot_for_comparison):
                  st.session_state.vip_data_df_interactive_snapshot_for_comparison = edited_df_interactive.copy()
-        else: st.info("Le tableau d'exploration sera disponible après l'analyse si des traits numériques sont identifiés.")
+        else: 
+            st.info("Le tableau d'exploration sera disponible après l'analyse si des traits numériques sont identifiés.")
+
+        # --- DÉPLACEMENT DU SLIDER POUR NOMBRE DE CLUSTERS ---
+        st.markdown("---") # Séparateur visuel
+        st.markdown("##### Paramètres ACP")
+        n_clusters_selected_val = st.slider(
+            "Nombre de clusters (pour ACP)", 2, 8, 
+            value=st.session_state.get('n_clusters_slider_main_value', 3), 
+            key="n_clusters_slider_main_key_moved", # Nouvelle clé pour éviter conflit si l'ancienne existe
+            disabled=ref.empty,
+            help="Choisissez le nombre de groupes à former lors de l'Analyse en Composantes Principales."
+        )
+        if n_clusters_selected_val != st.session_state.get('n_clusters_slider_main_value', 3):
+            st.session_state.n_clusters_slider_main_value = n_clusters_selected_val
+            st.session_state.analysis_has_run_for_current_selection = False 
+            st.rerun()
+
 
     with col_interactive_graph:
         st.markdown("##### Graphique d'exploration")
@@ -712,31 +727,21 @@ if st.session_state.run_main_analysis_once and not st.session_state.get('sub', p
                             except Exception as e: print(f"Erreur calcul Hull interactif {cluster_label} ({x_axis_plot}, {y_axis_plot}): {e}")
                 fig_interactive_scatter.update_layout(title_text=f"{y_axis_plot} vs. {x_axis_plot}", title_x=0.5,xaxis_title=x_axis_plot, yaxis_title=y_axis_plot, dragmode='pan')
                 st.plotly_chart(fig_interactive_scatter, use_container_width=True, config={'scrollZoom': True})
+
 elif st.session_state.run_main_analysis_once and st.session_state.get('sub', pd.DataFrame()).empty :
     st.markdown("---")
-    st.subheader("Étape 2: Exploration Interactive des Variables")
+    st.subheader("Étape 2: Exploration Interactive et Paramètres ACP")
     st.warning("L'analyse principale n'a pas abouti à des données suffisantes pour cette section (aucune espèce trouvée ou traitée). Veuillez vérifier les étapes précédentes.")
 
 
 # ---------------------------------------------------------------------------- #
-# ÉTAPE 3: PARAMÈTRES D'ANALYSE ET VISUALISATION PRINCIPALE (ACP)
+# ÉTAPE 3: VISUALISATION PRINCIPALE (ACP)
 # ---------------------------------------------------------------------------- #
 st.markdown("---")
-st.subheader("Étape 3: Paramètres d'Analyse et Visualisation Principale (ACP)")
-col_controls_area, col_pca_plot_area = st.columns([1, 2]) 
-
-with col_controls_area:
-    st.markdown("##### Paramètres")
-    n_clusters_selected_val = st.slider(
-        "Nombre de clusters (pour ACP)", 2, 8, 
-        value=st.session_state.get('n_clusters_slider_main_value', 3), 
-        key="n_clusters_slider_main_key", 
-        disabled=ref.empty
-    )
-    if n_clusters_selected_val != st.session_state.get('n_clusters_slider_main_value', 3):
-        st.session_state.n_clusters_slider_main_value = n_clusters_selected_val
-        st.session_state.analysis_has_run_for_current_selection = False 
-        st.rerun()
+st.subheader("Étape 3: Visualisation Principale (ACP)")
+# La colonne des contrôles n'est plus nécessaire ici si le slider est déplacé
+# On peut utiliser directement st.container() ou laisser la colonne pour le graphique PCA
+_, col_pca_plot_area = st.columns([1, 2]) # Garder la structure pour le moment, le premier tiers est vide
 
 if st.session_state.run_main_analysis_once: 
     pdf_display_pca = st.session_state.get('pdf', pd.DataFrame())
@@ -745,16 +750,10 @@ if st.session_state.run_main_analysis_once:
        "Espece_User" in pdf_display_pca.columns and "Ecologie" in pdf_display_pca.columns:
         
         y_pca_col = None
-        if "PC2" in pdf_display_pca.columns: # Priorité à PC2 si elle existe
+        if "PC2" in pdf_display_pca.columns: 
             y_pca_col = "PC2"
-        # Fallback si PC2 n'existe pas mais qu'il y a au moins une autre colonne PC (ex: si PCA ne donne qu'1 comp.)
-        # Ce fallback est moins pertinent si on s'attend à au moins 2 PCs pour un scatter plot.
-        # elif len(pdf_display_pca.columns) > 1 and any(col.startswith("PC") for col in pdf_display_pca.columns if col != "PC1"):
-        #     potential_y_cols = [col for col in pdf_display_pca.columns if col.startswith("PC") and col != "PC1"]
-        #     if potential_y_cols: y_pca_col = potential_y_cols[0]
-
-
-        if "PC1" in pdf_display_pca.columns and y_pca_col : # S'assurer que PC1 et y_pca_col sont valides
+        
+        if "PC1" in pdf_display_pca.columns and y_pca_col : 
             fig_pca = px.scatter(pdf_display_pca, x="PC1", y=y_pca_col, color="Cluster", text="Espece_User", 
                                  hover_name="Espece_User", custom_data=["Espece_User", "Ecologie"], 
                                  template="plotly_dark", height=500, color_discrete_sequence=COLOR_SEQUENCE)
@@ -782,7 +781,7 @@ if st.session_state.run_main_analysis_once:
                                                          showlegend=False, hoverinfo='skip'))
                         except Exception as e: print(f"Erreur calcul Hull ACP pour cluster {cluster_label}: {e}")
             fig_pca.update_layout(title_text="Plot PCA des espèces", title_x=0.5, legend_title_text='Cluster', dragmode='pan')
-        else: # Cas où PC1 ou y_pca_col (souvent PC2) n'est pas disponible pour le plot
+        else: 
             fig_pca = None 
             if not pdf_display_pca.empty : 
                  with col_pca_plot_area: st.warning("Moins de deux composantes principales disponibles pour le graphique PCA. Le graphique ne peut être affiché.")
@@ -821,7 +820,7 @@ with col_pca_plot_area:
     elif st.session_state.run_main_analysis_once and st.session_state.get('sub', pd.DataFrame()).empty:
         st.warning("L'analyse n'a pas produit de résultats affichables pour le PCA (pas d'espèces traitées ou PCA impossible).")
     elif st.session_state.run_main_analysis_once and fig_pca is None and not st.session_state.get('pdf', pd.DataFrame()).empty : 
-        pass # Message déjà géré dans le bloc de création de fig_pca
+        pass 
     elif st.session_state.run_main_analysis_once :
          st.warning("Le graphique PCA n'a pas pu être généré. Vérifiez les données d'entrée et les paramètres.")
 
