@@ -18,48 +18,73 @@ except ImportError:
     # Simulation de la fonction core.analyse pour permettre à l'UI de fonctionner
     class MockPCA:
         def __init__(self):
-            self.components_ = np.array([[0.5, 0.5], [-0.5, 0.5]]) # Exemple
-            self.explained_variance_ = np.array([0.6, 0.4]) # Exemple
+            # Simuler des composantes et variances expliquées plus réalistes
+            self.components_ = np.array([[0.707, 0.707], [-0.707, 0.707]]) 
+            self.explained_variance_ = np.array([0.6, 0.3]) # Somme < nombre de variables initiales
 
     def mock_analyse(sub_df, n_clusters):
         n_samples = len(sub_df)
-        if n_samples == 0:
+        numeric_cols = sub_df.select_dtypes(include=np.number)
+        n_features = numeric_cols.shape[1]
+
+        if n_samples == 0 or n_features == 0:
             # Retourner des structures vides mais conformes
             return np.array([]), MockPCA(), pd.DataFrame(columns=['PC1', 'PC2']), pd.DataFrame()
         
         # Simuler des coordonnées PCA (2 composantes)
-        coords_array = np.random.rand(n_samples, 2) * 10
-        coords_df = pd.DataFrame(coords_array, columns=[f"PC{i+1}" for i in range(coords_array.shape[1])])
+        coords_array = np.random.rand(n_samples, min(2, n_features)) * 10
+        pc_cols = [f"PC{i+1}" for i in range(coords_array.shape[1])]
+        coords_df = pd.DataFrame(coords_array, columns=pc_cols)
 
         # Simuler des labels de cluster
-        if n_samples < n_clusters and n_samples > 0 : # Éviter n_clusters = 0 si n_samples = 0
+        if n_samples < n_clusters and n_samples > 0 : 
             labels = np.arange(n_samples)
         elif n_samples >= n_clusters and n_clusters > 0:
             labels = np.random.randint(0, n_clusters, n_samples)
-        else: # Cas où n_samples = 0 ou n_clusters = 0
+        else: 
             labels = np.array([])
         
         # Simuler X (données normalisées pour le dendrogramme)
-        numeric_cols = sub_df.select_dtypes(include=np.number)
         if not numeric_cols.empty:
             X_scaled = (numeric_cols - numeric_cols.mean()) / numeric_cols.std()
             X_scaled = X_scaled.fillna(0).values
-        else: # S'il n'y a pas de colonnes numériques
-            X_scaled = np.random.rand(n_samples, 2) if n_samples > 0 else np.array([]).reshape(0,2)
+        else: 
+            X_scaled = np.random.rand(n_samples, min(2, n_features)) if n_samples > 0 else np.array([]).reshape(0,min(2,n_features))
 
         mock_pca_obj = MockPCA()
-        num_numeric_traits = X_scaled.shape[1] if X_scaled.ndim == 2 else 0
         
-        if num_numeric_traits > 0:
-            # S'assurer que components_ a le bon nombre de lignes (traits)
-            mock_pca_obj.components_ = np.random.rand(num_numeric_traits, min(2, num_numeric_traits))
-            mock_pca_obj.explained_variance_ = np.random.rand(min(2, num_numeric_traits))
+        if n_features > 0:
+            # Ajuster la taille des composantes simulées au nombre de traits réels
+            # Les composantes sont (n_components, n_features) dans scikit-learn
+            # Ici, on simule components_ comme (n_features, n_components) pour correspondre à l'usage
+            # pca_results.components_ (qui est (n_components, n_features)) puis transposé.
+            # Pour la simulation, components_ sera (n_features, n_pcs_simulated)
+            n_pcs_simulated = min(2, n_features)
+            sim_components = np.random.rand(n_features, n_pcs_simulated)
+            # Normaliser les vecteurs propres simulés (colonnes de sim_components)
+            if sim_components.size > 0:
+                 sim_components = sim_components / np.linalg.norm(sim_components, axis=0, keepdims=True)
+            
+            mock_pca_obj.components_ = sim_components.T # Transposer pour correspondre à scikit-learn (n_pcs_simulated, n_features)
+            
+            # Simuler explained_variance_ de manière décroissante et somme <= n_pcs_simulated (pour données std)
+            sim_explained_variance = np.sort(np.random.rand(n_pcs_simulated))[::-1]
+            sim_explained_variance = sim_explained_variance / sim_explained_variance.sum() * n_pcs_simulated * 0.7 # Assurer que c'est plausible
+            mock_pca_obj.explained_variance_ = sim_explained_variance
+
         else: 
             mock_pca_obj.components_ = np.array([])
             mock_pca_obj.explained_variance_ = np.array([])
-            # Si pas de traits numériques, coords_df peut aussi être vide ou avoir des PC par défaut
-            if n_samples > 0 and coords_df.empty: # Si coords_df n'a pas été peuplé
+            if n_samples > 0 and coords_df.empty: 
                 coords_df = pd.DataFrame(np.random.rand(n_samples, 2), columns=['PC1', 'PC2'])
+        
+        # S'assurer que coords_df a le bon nombre de colonnes si pca_obj a moins de 2 composantes
+        if mock_pca_obj.explained_variance_.shape[0] < 2 and not coords_df.empty:
+            if mock_pca_obj.explained_variance_.shape[0] == 1 and 'PC2' in coords_df.columns:
+                coords_df = coords_df[['PC1']] # Garder seulement PC1
+            elif mock_pca_obj.explained_variance_.shape[0] == 0:
+                 coords_df = pd.DataFrame(index=coords_df.index)
+
 
         return labels, mock_pca_obj, coords_df, X_scaled
 
@@ -135,11 +160,14 @@ def load_data(file_path="data_ref.csv"):
                 'Espece': example_species,
                 'Trait_Num_1': np.random.rand(30) * 10,
                 'Trait_Num_2': np.random.randint(1, 100, 30),
-                'Trait_Cat_1': np.random.choice(['X', 'Y', 'Z'], 30)
+                'Trait_Cat_1': np.random.choice(['X', 'Y', 'Z'], 30),
+                'Humidité_édaphique': np.random.rand(30) * 5 + 1, # Ajout de traits simulés
+                'Matière_organique': np.random.rand(30) * 10,
+                'Lumière': np.random.rand(30) * 1000
             })
             # Ajouter quelques espèces spécifiques pour le test des avertissements
-            data.loc[len(data)] = ['Rhamnus pumila', 5.0, 50, 'X']
-            data.loc[len(data)] = ['Vulpia sp.', 2.0, 20, 'Y']
+            data.loc[len(data)] = ['Rhamnus pumila', 5.0, 50, 'X', 3, 5, 500]
+            data.loc[len(data)] = ['Vulpia sp.', 2.0, 20, 'Y', 2, 2, 800]
             return data
         
         data = core.read_reference(file_path) 
@@ -240,16 +268,16 @@ ecology_df = load_ecology_data()
 default_session_states = {
     'x_axis_trait_interactive': None,
     'y_axis_trait_interactive': None,
-    'run_main_analysis_once': False, # Indique si une analyse a été tentée au moins une fois
+    'run_main_analysis_once': False, 
     'vip_data_df_interactive': pd.DataFrame(),
-    'vip_data_df_interactive_snapshot_for_comparison': pd.DataFrame(), # Pour la logique de l'éditeur interactif
-    'sub': pd.DataFrame(), # Données filtrées pour l'analyse
-    'pdf': pd.DataFrame(), # Données PCA avec clusters et métadonnées
-    'X_for_dendro': np.array([]), # Données scalées pour dendrogramme
+    'vip_data_df_interactive_snapshot_for_comparison': pd.DataFrame(), 
+    'sub': pd.DataFrame(), 
+    'pdf': pd.DataFrame(), 
+    'X_for_dendro': np.array([]), 
     'numeric_trait_names_for_interactive_plot': [],
-    'selected_habitats_indices': None, # CHANGÉ: Stocke l'index (entier) de la colonne sélectionnée ou None
+    'selected_habitats_indices': None, 
     'previous_num_cols': 0,
-    'analysis_has_run_for_current_selection': False # Nouveau: pour éviter relance inutile
+    'analysis_has_run_for_current_selection': False 
 }
 
 for key, value in default_session_states.items():
@@ -259,11 +287,10 @@ for key, value in default_session_states.items():
 if 'releves_df' not in st.session_state or not isinstance(st.session_state.releves_df, pd.DataFrame):
     num_placeholder_cols = 15
     num_placeholder_rows_total = 11 
-    # La première ligne contient les noms d'habitats, vides par défaut
-    header = [f"Habitat {j+1}" for j in range(num_placeholder_cols)] # Noms d'habitats par défaut
+    header = [f"Habitat {j+1}" for j in range(num_placeholder_cols)] 
     placeholder_rows = [["" for _ in range(num_placeholder_cols)] for _ in range(num_placeholder_rows_total -1)]
     st.session_state.releves_df = pd.DataFrame([header] + placeholder_rows)
-    st.session_state.releves_df.columns = [str(col) for col in st.session_state.releves_df.columns] # Noms de colonnes en str
+    st.session_state.releves_df.columns = [str(col) for col in st.session_state.releves_df.columns] 
     st.session_state.previous_num_cols = num_placeholder_cols
 
 
@@ -273,7 +300,6 @@ if 'releves_df' not in st.session_state or not isinstance(st.session_state.relev
 st.markdown("---")
 st.subheader("Étape 1: Importation et Sélection des Relevés Floristiques")
 
-# --- Sélection des Habitats via boutons alignés ---
 current_releves_df_for_selection = st.session_state.releves_df.copy()
 
 if not current_releves_df_for_selection.empty and \
@@ -285,16 +311,13 @@ if not current_releves_df_for_selection.empty and \
     
     st.markdown("**Cliquez sur le nom d'un habitat ci-dessous pour le sélectionner pour l'analyse :**")
     
-    # Assurer que selected_habitats_indices est valide
     if st.session_state.selected_habitats_indices is not None and \
        st.session_state.selected_habitats_indices >= num_actual_cols:
         st.session_state.selected_habitats_indices = None
         st.session_state.analysis_has_run_for_current_selection = False
 
-
-    cols_per_row_for_selection_buttons = min(7, num_actual_cols if num_actual_cols > 0 else 1)
     if num_actual_cols > 0:
-        button_cols_layout = st.columns(num_actual_cols) # Une colonne par habitat pour alignement
+        button_cols_layout = st.columns(num_actual_cols) 
         
         for i in range(num_actual_cols):
             habitat_name_for_button = habitat_names_from_df[i] if pd.notna(habitat_names_from_df[i]) and str(habitat_names_from_df[i]).strip() != "" else f"Relevé {i+1}"
@@ -304,14 +327,12 @@ if not current_releves_df_for_selection.empty and \
             button_key = f"habitat_select_button_{i}"
 
             with button_cols_layout[i]:
-                # Utiliser un conteneur div pour appliquer la classe CSS personnalisée
                 st.markdown(f'<div class="habitat-select-button">', unsafe_allow_html=True)
                 if st.button(habitat_name_for_button, key=button_key, type=button_type, use_container_width=True):
                     if st.session_state.selected_habitats_indices != i:
                         st.session_state.selected_habitats_indices = i
-                        st.session_state.run_main_analysis_once = False # Réinitialiser pour forcer la ré-évaluation de l'affichage
-                        st.session_state.analysis_has_run_for_current_selection = False # Nouvelle analyse nécessaire
-                    # Pas besoin de désélectionner explicitement, car on ne stocke qu'un seul index
+                        st.session_state.run_main_analysis_once = False 
+                        st.session_state.analysis_has_run_for_current_selection = False 
                     st.rerun()
                 st.markdown('</div>', unsafe_allow_html=True)
     else:
@@ -319,8 +340,6 @@ if not current_releves_df_for_selection.empty and \
 else:
     st.warning("Le tableau de données est vide ou ne contient pas de colonnes pour la sélection.")
 
-
-# --- Affichage du Data Editor ---
 st.info("Copiez-collez vos données de relevés ici (Ctrl+V ou Cmd+V). La première ligne doit contenir les noms des habitats/relevés. Les lignes suivantes contiennent les espèces.")
 
 if not all(isinstance(col, str) for col in st.session_state.releves_df.columns):
@@ -335,49 +354,39 @@ edited_releves_df_from_editor = st.data_editor(
 
 if not edited_releves_df_from_editor.equals(st.session_state.releves_df):
     st.session_state.releves_df = edited_releves_df_from_editor.copy()
-    # Si le nombre de colonnes change, réinitialiser la sélection
     if len(st.session_state.releves_df.columns) != st.session_state.previous_num_cols:
         if st.session_state.selected_habitats_indices is not None and \
            st.session_state.selected_habitats_indices >= len(st.session_state.releves_df.columns):
             st.session_state.selected_habitats_indices = None
             st.session_state.analysis_has_run_for_current_selection = False
-            st.session_state.run_main_analysis_once = False # Reset
+            st.session_state.run_main_analysis_once = False 
         st.session_state.previous_num_cols = len(st.session_state.releves_df.columns)
     st.rerun()
 
-# Variables pour l'analyse principale, recalculées si nécessaire
 fig_pca = None
 fig_dend = None
 species_binom_user_unique = [] 
 
-# ---------------------------------------------------------------------------- #
-# ANALYSE PRINCIPALE (CALCULS) - Se déclenche par sélection d'habitat
-# ---------------------------------------------------------------------------- #
 selected_habitat_idx_for_analysis = st.session_state.get('selected_habitats_indices', None)
 
-# Déclencher l'analyse si un habitat est sélectionné ET que l'analyse n'a pas encore tourné pour cette sélection
 if selected_habitat_idx_for_analysis is not None and \
    not ref.empty and \
    not st.session_state.get('analysis_has_run_for_current_selection', False):
 
-    st.session_state.run_main_analysis_once = True # Marquer que l'analyse a été tentée
-    st.session_state.analysis_has_run_for_current_selection = True # Marquer comme exécutée pour cette sélection
+    st.session_state.run_main_analysis_once = True 
+    st.session_state.analysis_has_run_for_current_selection = True 
 
-    # Réinitialiser les dataframes de résultats potentiels
     st.session_state.sub = pd.DataFrame()
     st.session_state.pdf = pd.DataFrame()
     st.session_state.X_for_dendro = np.array([])
     st.session_state.vip_data_df_interactive = pd.DataFrame()
     st.session_state.numeric_trait_names_for_interactive_plot = []
 
-
     species_raw_from_table = []
     df_for_species_extraction = st.session_state.releves_df.copy() 
     
-    # Utiliser selected_habitat_idx_for_analysis qui est un entier
     if not df_for_species_extraction.empty and len(df_for_species_extraction) > 1:
         if selected_habitat_idx_for_analysis < len(df_for_species_extraction.columns):
-            # Les espèces sont à partir de la deuxième ligne (index 1)
             species_in_col_series = df_for_species_extraction.iloc[1:, selected_habitat_idx_for_analysis]
             species_in_col_cleaned = species_in_col_series.dropna().astype(str).str.strip().replace('', np.nan).dropna().tolist()
             species_raw_from_table.extend(s for s in species_in_col_cleaned if s)
@@ -388,8 +397,7 @@ if selected_habitat_idx_for_analysis is not None and \
     if not species_binom_user_unique:
         st.error("Aucune espèce valide (nom binomial) extraite du relevé sélectionné. Vérifiez vos données et sélection.")
         st.session_state.run_main_analysis_once = False 
-        st.session_state.analysis_has_run_for_current_selection = False # Permet de retenter si l'utilisateur change qqc
-        # Pas de st.stop() ici, pour permettre à l'UI de rester active
+        st.session_state.analysis_has_run_for_current_selection = False 
     else:
         indices_to_keep_from_ref = []
         if not ref_binom_series.empty:
@@ -402,9 +410,8 @@ if selected_habitat_idx_for_analysis is not None and \
                 else:
                     st.error("Structure inattendue de ref_binom_series après reset_index.")
                     st.session_state.run_main_analysis_once = False; st.session_state.analysis_has_run_for_current_selection = False;
-                    # Pas de st.stop()
-
-                if st.session_state.run_main_analysis_once : # Continue if no error above
+                    
+                if st.session_state.run_main_analysis_once : 
                     for user_binom_specie in species_binom_user_unique:
                         matches_in_ref = ref_indexed_binom[ref_indexed_binom['ref_binom_val'] == user_binom_specie]
                         if not matches_in_ref.empty:
@@ -413,8 +420,7 @@ if selected_habitat_idx_for_analysis is not None and \
                 st.error("ref_binom_series n'est pas une Series Pandas.")
                 st.session_state.run_main_analysis_once = False; st.session_state.analysis_has_run_for_current_selection = False;
 
-
-        if st.session_state.run_main_analysis_once: # Continue if no error
+        if st.session_state.run_main_analysis_once: 
             indices_to_keep_from_ref = sorted(list(set(indices_to_keep_from_ref)))
 
             if indices_to_keep_from_ref:
@@ -432,7 +438,7 @@ if selected_habitat_idx_for_analysis is not None and \
             if not_found_user_raw_names:
                 st.warning("Non trouvées dans la base de traits : " + ", ".join(not_found_user_raw_names), icon="⚠️")
 
-            n_clusters_selected_main = st.session_state.get('n_clusters_slider_main_value', 3) # Get value from slider
+            n_clusters_selected_main = st.session_state.get('n_clusters_slider_main_value', 3) 
 
             if st.session_state.sub.empty:
                 st.error("Aucune des espèces sélectionnées n'a été trouvée dans la base de traits. L'analyse ne peut continuer.")
@@ -460,9 +466,9 @@ if selected_habitat_idx_for_analysis is not None and \
                             else: 
                                 st.error("Coordonnées PCA (core.analyse) : format ou longueur incorrecte.")
                                 st.session_state.run_main_analysis_once = False; st.session_state.analysis_has_run_for_current_selection = False;
-                                coords_df = pd.DataFrame() # Ensure it's a DF to prevent downstream errors
+                                coords_df = pd.DataFrame() 
 
-                        if st.session_state.run_main_analysis_once: # Check again if previous steps failed
+                        if st.session_state.run_main_analysis_once: 
                             current_pdf = coords_df.copy()
                             if not current_pdf.empty:
                                 if len(labels) == len(current_pdf): current_pdf["Cluster"] = labels.astype(str)
@@ -491,22 +497,40 @@ if selected_habitat_idx_for_analysis is not None and \
                                    isinstance(pca_results.components_, np.ndarray) and isinstance(pca_results.explained_variance_, np.ndarray) and \
                                    pca_results.components_.size > 0 and pca_results.explained_variance_.size > 0 :
                                     
-                                    pca_components = pca_results.components_
-                                    if pca_components.ndim == 1: pca_components = pca_components.reshape(-1,1)
-                                    loadings = pca_components.T * (pca_results.explained_variance_ ** 0.5)
-                                    if loadings.ndim == 1 : loadings = loadings.reshape(-1,1)
+                                    pca_components_values = pca_results.components_ # (n_components, n_features)
+                                    explained_variance_values = pca_results.explained_variance_ # (n_components,)
                                     
-                                    communal = (loadings**2).sum(axis=1)
+                                    # Loadings: (n_features, n_components)
+                                    # Chaque colonne est un vecteur de loadings pour une composante.
+                                    # Chaque ligne est un vecteur de loadings pour une variable.
+                                    # Correct calculation for loadings: components.T * sqrt(explained_variance)
+                                    # components_ are (n_components, n_features)
+                                    # explained_variance_ is (n_components,)
+                                    # loadings should be (n_features, n_components)
+                                    
+                                    # Si pca_components_values est (n_features, n_components) comme dans la simulation précédente
+                                    # loadings = pca_components_values * np.sqrt(explained_variance_values[np.newaxis, :])
+                                    
+                                    # Si pca_components_values est (n_components, n_features) comme dans scikit-learn
+                                    loadings = pca_components_values.T * np.sqrt(explained_variance_values[:, np.newaxis])
+                                    loadings = loadings.T # Transposer pour avoir (n_features, n_components)
+                                                                        
+                                    communal = (loadings**2).sum(axis=1) # Somme sur les composantes pour chaque variable
+                                    
                                     trait_columns_for_communal = st.session_state.sub.select_dtypes(include=np.number).columns.tolist()
                                     
                                     if len(communal) == len(trait_columns_for_communal):
+                                        communal_percent = (communal * 100).round(0).astype(int)
+                                        # CORRECTION: Borner les communalités entre 0 et 100%
+                                        communal_percent_clipped = np.clip(communal_percent, 0, 100)
+                                        
                                         st.session_state.vip_data_df_for_calc = pd.DataFrame({
                                             "Variable": trait_columns_for_communal,
-                                            "Communalité (%)": (communal * 100).round(0).astype(int),
+                                            "Communalité (%)": communal_percent_clipped, # Utiliser la valeur bornée
                                         }).sort_values("Communalité (%)", ascending=False).reset_index(drop=True)
                                     else: 
                                         st.session_state.vip_data_df_for_calc = pd.DataFrame(columns=["Variable", "Communalité (%)"])
-                                        st.warning(f"Communalités non calculées (dimensions: {len(communal)} vs {len(trait_columns_for_communal)}).")
+                                        st.warning(f"Communalités non calculées (dimensions des loadings/traits incohérentes: {len(communal)} vs {len(trait_columns_for_communal)}).")
                                 else:
                                     st.session_state.vip_data_df_for_calc = pd.DataFrame(columns=["Variable", "Communalité (%)"])
                                     st.warning("Résultats PCA incomplets pour communalités (components_ ou explained_variance_ manquants/incorrects).")
@@ -542,20 +566,14 @@ if selected_habitat_idx_for_analysis is not None and \
                                 else:
                                     st.session_state.vip_data_df_interactive = pd.DataFrame(columns=["Variable", "Communalité (%)", "Axe X", "Axe Y"])
                                 st.session_state.vip_data_df_interactive_snapshot_for_comparison = st.session_state.vip_data_df_interactive.copy()
-                                # Forcer le re-render pour mettre à jour l'Étape 2 (exploration interactive)
-                                # st.rerun() # Un rerun ici peut être trop fréquent, l'UI se mettra à jour naturellement.
-                            else: # current_pdf is empty
+                            else: 
                                 st.warning("L'analyse n'a pas produit de coordonnées PCA (coords_df vide).")
                                 st.session_state.run_main_analysis_once = False
                                 st.session_state.analysis_has_run_for_current_selection = False
-
-
                 except Exception as e:
                     st.error(f"Erreur lors de l'analyse principale : {e}"); st.exception(e)
                     st.session_state.run_main_analysis_once = False; st.session_state.analysis_has_run_for_current_selection = False;
-                    # Pas de st.stop()
 
-# Afficher un message si aucune sélection n'est faite mais que les données de réf sont là
 if selected_habitat_idx_for_analysis is None and not ref.empty:
     st.info("Veuillez sélectionner un habitat à l'Étape 1 pour lancer l'analyse.")
 elif ref.empty:
@@ -567,14 +585,13 @@ elif ref.empty:
 # ---------------------------------------------------------------------------- #
 if st.session_state.run_main_analysis_once and not st.session_state.get('sub', pd.DataFrame()).empty:
     st.markdown("---"); st.subheader("Étape 2: Exploration Interactive des Variables")
-    col_interactive_table, col_interactive_graph = st.columns([1, 2]) # Disposition 1/3, 2/3
+    col_interactive_table, col_interactive_graph = st.columns([1, 2]) 
 
     with col_interactive_table:
         st.markdown("##### Tableau d'exploration interactif")
         df_editor_source_interactive = st.session_state.get('vip_data_df_interactive', pd.DataFrame())
 
         if not df_editor_source_interactive.empty:
-            # S'assurer que le snapshot est compatible ou le recréer
             snapshot_cols = list(st.session_state.get('vip_data_df_interactive_snapshot_for_comparison', pd.DataFrame()).columns)
             current_cols = list(df_editor_source_interactive.columns)
             if 'vip_data_df_interactive_snapshot_for_comparison' not in st.session_state or snapshot_cols != current_cols:
@@ -594,26 +611,22 @@ if st.session_state.run_main_analysis_once and not st.session_state.get('sub', p
                 num_rows="fixed"
             )
             
-            # Logique pour la sélection unique des axes X et Y
             made_change_in_interactive_axes = False
             new_x_trait_interactive = st.session_state.x_axis_trait_interactive
             new_y_trait_interactive = st.session_state.y_axis_trait_interactive
 
-            # Traitement pour l'axe X
             selected_x_vars_interactive = edited_df_interactive[edited_df_interactive["Axe X"]]["Variable"].tolist()
             if selected_x_vars_interactive:
-                # Si plusieurs sont cochés, prendre le dernier (ou le premier) comme sélection effective
                 chosen_x = selected_x_vars_interactive[-1] 
                 if chosen_x != st.session_state.x_axis_trait_interactive:
                     new_x_trait_interactive = chosen_x
                     made_change_in_interactive_axes = True
-                elif len(selected_x_vars_interactive) > 1 : # Plusieurs cochés, mais le "bon" y est, forcer la sélection unique
-                    made_change_in_interactive_axes = True # Forcer la mise à jour du df source
-            elif st.session_state.x_axis_trait_interactive is not None: # Aucun n'est coché, mais il y avait une sélection avant
+                elif len(selected_x_vars_interactive) > 1 : 
+                    made_change_in_interactive_axes = True 
+            elif st.session_state.x_axis_trait_interactive is not None: 
                 new_x_trait_interactive = None
                 made_change_in_interactive_axes = True
             
-            # Traitement pour l'axe Y
             selected_y_vars_interactive = edited_df_interactive[edited_df_interactive["Axe Y"]]["Variable"].tolist()
             if selected_y_vars_interactive:
                 chosen_y = selected_y_vars_interactive[-1]
@@ -630,18 +643,14 @@ if st.session_state.run_main_analysis_once and not st.session_state.get('sub', p
                 st.session_state.x_axis_trait_interactive = new_x_trait_interactive
                 st.session_state.y_axis_trait_interactive = new_y_trait_interactive
                 
-                # Mettre à jour le DataFrame source pour refléter la sélection unique
                 df_updated_for_editor = df_editor_source_interactive.copy()
                 df_updated_for_editor["Axe X"] = (df_updated_for_editor["Variable"] == new_x_trait_interactive)
                 df_updated_for_editor["Axe Y"] = (df_updated_for_editor["Variable"] == new_y_trait_interactive)
                 st.session_state.vip_data_df_interactive = df_updated_for_editor
                 st.session_state.vip_data_df_interactive_snapshot_for_comparison = df_updated_for_editor.copy()
                 st.rerun()
-            # Gérer le cas où aucune case n'est cochée ou si d'autres types d'éditions (non prévues ici) ont eu lieu
             elif not edited_df_interactive.equals(st.session_state.vip_data_df_interactive_snapshot_for_comparison):
                  st.session_state.vip_data_df_interactive_snapshot_for_comparison = edited_df_interactive.copy()
-
-
         else: st.info("Le tableau d'exploration sera disponible après l'analyse si des traits numériques sont identifiés.")
 
     with col_interactive_graph:
@@ -662,7 +671,6 @@ if st.session_state.run_main_analysis_once and not st.session_state.get('sub', p
             else:
                 plot_data_interactive = pd.DataFrame({'Espece_User': pdf_plot['Espece_User'],'Ecologie': pdf_plot['Ecologie'],x_axis_plot: sub_plot[x_axis_plot].copy(),y_axis_plot: sub_plot[y_axis_plot].copy(),'Cluster': pdf_plot['Cluster']})
                 plot_data_to_use = plot_data_interactive.copy()
-                # Jittering
                 temp_x_col_grp = "_temp_x"; temp_y_col_grp = "_temp_y"
                 plot_data_to_use[temp_x_col_grp] = plot_data_to_use[x_axis_plot]; plot_data_to_use[temp_y_col_grp] = plot_data_to_use[y_axis_plot]
                 duplicates_mask = plot_data_to_use.duplicated(subset=[temp_x_col_grp, temp_y_col_grp], keep=False)
@@ -688,7 +696,6 @@ if st.session_state.run_main_analysis_once and not st.session_state.get('sub', p
 
                 fig_interactive_scatter = px.scatter(plot_data_to_use, x=x_axis_plot, y=y_axis_plot,color="Cluster", text="Espece_User", hover_name="Espece_User",custom_data=["Espece_User", "Ecologie"], template="plotly_dark", height=600, color_discrete_sequence=COLOR_SEQUENCE)
                 fig_interactive_scatter.update_traces(textposition="top center", marker=dict(opacity=0.8, size=8),textfont=dict(size=LABEL_FONT_SIZE_ON_PLOTS),hovertemplate=(f"<span style='font-size: {HOVER_SPECIES_FONT_SIZE}px;'><b>%{{customdata[0]}}</b></span><br>"f"<br><span style='font-size: {HOVER_ECOLOGY_TITLE_FONT_SIZE}px;'><i>Écologie:</i></span><br>"f"<span style='font-size: {HOVER_ECOLOGY_TEXT_FONT_SIZE}px;'>%{{customdata[1]}}</span>" "<extra></extra>" ))
-                # Convex Hull
                 unique_clusters_interactive = sorted(plot_data_to_use["Cluster"].unique())
                 cluster_color_map_interactive = {lbl: COLOR_SEQUENCE[i % len(COLOR_SEQUENCE)] for i, lbl in enumerate(unique_clusters_interactive)}
                 for cluster_label in unique_clusters_interactive:
@@ -719,31 +726,31 @@ col_controls_area, col_pca_plot_area = st.columns([1, 2])
 
 with col_controls_area:
     st.markdown("##### Paramètres")
-    # Garder le slider pour n_clusters, sa valeur sera utilisée lors de l'analyse
     n_clusters_selected_val = st.slider(
         "Nombre de clusters (pour ACP)", 2, 8, 
-        value=st.session_state.get('n_clusters_slider_main_value', 3), # Persist value
-        key="n_clusters_slider_main_key", # Unique key for the widget
+        value=st.session_state.get('n_clusters_slider_main_value', 3), 
+        key="n_clusters_slider_main_key", 
         disabled=ref.empty
     )
-    # Stocker la valeur du slider dans session_state pour y accéder dans la logique d'analyse
     if n_clusters_selected_val != st.session_state.get('n_clusters_slider_main_value', 3):
         st.session_state.n_clusters_slider_main_value = n_clusters_selected_val
-        st.session_state.analysis_has_run_for_current_selection = False # Relancer l'analyse si n_cluster change
+        st.session_state.analysis_has_run_for_current_selection = False 
         st.rerun()
 
-
-# --- Affichage du graphique PCA (dans col_pca_plot_area de l'Étape 3) ---
-if st.session_state.run_main_analysis_once: # Si une analyse a été tentée
+if st.session_state.run_main_analysis_once: 
     pdf_display_pca = st.session_state.get('pdf', pd.DataFrame())
     
     if not pdf_display_pca.empty and "PC1" in pdf_display_pca.columns and "Cluster" in pdf_display_pca.columns and \
        "Espece_User" in pdf_display_pca.columns and "Ecologie" in pdf_display_pca.columns:
         
-        y_pca_col = "PC2" if "PC2" in pdf_display_pca.columns and pdf_display_pca.shape[1] > 2 else \
-                      (pdf_display_pca.columns[1] if len(pdf_display_pca.columns) > 1 and pdf_display_pca.columns[1].startswith("PC") else None)
+        y_pca_col = None
+        if "PC2" in pdf_display_pca.columns:
+            y_pca_col = "PC2"
+        elif len(pdf_display_pca.columns) > 1 and pdf_display_pca.columns[1].startswith("PC"):
+             y_pca_col = pdf_display_pca.columns[1]
 
-        if y_pca_col: # S'assurer que y_pca_col est défini
+
+        if y_pca_col: 
             fig_pca = px.scatter(pdf_display_pca, x="PC1", y=y_pca_col, color="Cluster", text="Espece_User", 
                                  hover_name="Espece_User", custom_data=["Espece_User", "Ecologie"], 
                                  template="plotly_dark", height=500, color_discrete_sequence=COLOR_SEQUENCE)
@@ -772,11 +779,10 @@ if st.session_state.run_main_analysis_once: # Si une analyse a été tentée
                         except Exception as e: print(f"Erreur calcul Hull ACP pour cluster {cluster_label}: {e}")
             fig_pca.update_layout(title_text="Plot PCA des espèces", title_x=0.5, legend_title_text='Cluster', dragmode='pan')
         else:
-            fig_pca = None # Pas de deuxième composante principale trouvée
-            if not pdf_display_pca.empty : # Si pdf existe mais y_pca_col est None
+            fig_pca = None 
+            if not pdf_display_pca.empty : 
                  with col_pca_plot_area: st.warning("Moins de deux composantes principales disponibles pour le graphique PCA.")
 
-    # Préparation du dendrogramme (sera affiché dans sa propre section plus tard)
     X_for_dendro_display = st.session_state.get('X_for_dendro', np.array([]))
     sub_display_dendro = st.session_state.get('sub', pd.DataFrame())
     pdf_display_dendro_labels = st.session_state.get('pdf', pd.DataFrame())
@@ -786,7 +792,6 @@ if st.session_state.run_main_analysis_once: # Si une analyse a été tentée
         try:
             Z = linkage(X_for_dendro_display, method="ward")
             dyn_thresh = 0
-            # Utiliser n_clusters_selected de l'UI (stocké dans session_state)
             n_clust_for_dendro_color = st.session_state.get('n_clusters_slider_main_value', 3) 
 
             if n_clust_for_dendro_color > 1 and (n_clust_for_dendro_color -1) < Z.shape[0] : 
@@ -807,12 +812,16 @@ if st.session_state.run_main_analysis_once: # Si une analyse a été tentée
     else: fig_dend = None
 
 
-with col_pca_plot_area: # Partie de l'Étape 3
+with col_pca_plot_area: 
     if fig_pca: st.plotly_chart(fig_pca, use_container_width=True, config={'scrollZoom': True}) 
     elif st.session_state.run_main_analysis_once and st.session_state.get('sub', pd.DataFrame()).empty:
         st.warning("L'analyse n'a pas produit de résultats affichables pour le PCA (pas d'espèces traitées ou PCA impossible).")
-    elif st.session_state.run_main_analysis_once and fig_pca is None : 
-        st.warning("Le graphique PCA n'a pas pu être généré. Vérifiez les données d'entrée et les paramètres (ex: nombre de composantes).")
+    elif st.session_state.run_main_analysis_once and fig_pca is None and not st.session_state.get('pdf', pd.DataFrame()).empty : 
+        # Ce cas est pour quand pdf existe mais fig_pca n'a pas pu être créé (ex: <2 PCs)
+        # Le message est déjà affiché dans le bloc de création de fig_pca
+        pass
+    elif st.session_state.run_main_analysis_once :
+         st.warning("Le graphique PCA n'a pas pu être généré. Vérifiez les données d'entrée et les paramètres.")
 
 
 # ---------------------------------------------------------------------------- #
@@ -837,7 +846,7 @@ if st.session_state.run_main_analysis_once and not st.session_state.get('sub', p
             if col_idx == 0 : st.info("Aucun cluster (ACP) avec des espèces à afficher.")
         else: st.info("La composition des clusters (ACP) sera affichée ici après l'analyse (pas de données de cluster).")
     else: st.info("La composition des clusters (ACP) sera affichée ici après l'analyse (données de PCA non disponibles ou incomplètes).")
-elif st.session_state.run_main_analysis_once: # sub est vide mais analyse lancée
+elif st.session_state.run_main_analysis_once: 
     st.markdown("---"); st.subheader("Étape 4: Composition des Clusters (ACP)")
     st.info("Analyse lancée, mais aucune donnée d'espèce n'a pu être traitée pour la composition des clusters.")
 
@@ -853,7 +862,7 @@ if st.session_state.run_main_analysis_once and not st.session_state.get('sub', p
         st.info("Le dendrogramme n'a pas pu être généré (nécessite au moins 2 espèces uniques après traitement ou problème de données pour le linkage).")
     elif st.session_state.run_main_analysis_once : 
         st.info("Le dendrogramme n'a pas pu être généré. Vérifiez les données d'entrée (nombre d'espèces > 1, traits numériques).")
-elif st.session_state.run_main_analysis_once: # sub est vide mais analyse lancée
+elif st.session_state.run_main_analysis_once: 
     st.markdown("---"); st.subheader("Étape 5: Dendrogramme")
     st.info("Analyse lancée, mais aucune donnée d'espèce n'a pu être traitée pour le dendrogramme.")
 
