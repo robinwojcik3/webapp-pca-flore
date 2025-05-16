@@ -32,9 +32,12 @@ except ImportError:
             return np.array([]), MockPCA(), pd.DataFrame(columns=['PC1', 'PC2']), pd.DataFrame()
         
         # Simuler des coordonnées PCA (2 composantes)
-        coords_array = np.random.rand(n_samples, min(2, n_features)) * 10
+        # Le nombre de composantes simulées ne peut excéder n_features
+        n_pcs_to_simulate_coords = min(2, n_features)
+        coords_array = np.random.rand(n_samples, n_pcs_to_simulate_coords) * 10
         pc_cols = [f"PC{i+1}" for i in range(coords_array.shape[1])]
-        coords_df = pd.DataFrame(coords_array, columns=pc_cols)
+        coords_df = pd.DataFrame(coords_array, columns=pc_cols, index=sub_df.index)
+
 
         # Simuler des labels de cluster
         if n_samples < n_clusters and n_samples > 0 : 
@@ -49,41 +52,43 @@ except ImportError:
             X_scaled = (numeric_cols - numeric_cols.mean()) / numeric_cols.std()
             X_scaled = X_scaled.fillna(0).values
         else: 
-            X_scaled = np.random.rand(n_samples, min(2, n_features)) if n_samples > 0 else np.array([]).reshape(0,min(2,n_features))
+            # S'assurer que X_scaled a le bon nombre de features si numeric_cols est vide mais n_features > 0 (cas théorique)
+            X_scaled = np.random.rand(n_samples, n_features if n_features > 0 else 1) if n_samples > 0 else np.array([]).reshape(0, n_features if n_features > 0 else 1)
+
 
         mock_pca_obj = MockPCA()
         
         if n_features > 0:
             # Ajuster la taille des composantes simulées au nombre de traits réels
-            # Les composantes sont (n_components, n_features) dans scikit-learn
-            # Ici, on simule components_ comme (n_features, n_components) pour correspondre à l'usage
-            # pca_results.components_ (qui est (n_components, n_features)) puis transposé.
-            # Pour la simulation, components_ sera (n_features, n_pcs_simulated)
-            n_pcs_simulated = min(2, n_features)
-            sim_components = np.random.rand(n_features, n_pcs_simulated)
-            # Normaliser les vecteurs propres simulés (colonnes de sim_components)
-            if sim_components.size > 0:
-                 sim_components = sim_components / np.linalg.norm(sim_components, axis=0, keepdims=True)
+            # components_ de scikit-learn est (n_components, n_features)
+            n_pcs_simulated_obj = min(2, n_features) # Nombre de composantes pour l'objet PCA simulé
             
-            mock_pca_obj.components_ = sim_components.T # Transposer pour correspondre à scikit-learn (n_pcs_simulated, n_features)
+            sim_components_t = np.random.rand(n_features, n_pcs_simulated_obj) # Forme (n_features, n_components)
+            if sim_components_t.size > 0: # Normaliser chaque colonne (chaque composante)
+                 sim_components_t = sim_components_t / np.linalg.norm(sim_components_t, axis=0, keepdims=True)
             
-            # Simuler explained_variance_ de manière décroissante et somme <= n_pcs_simulated (pour données std)
-            sim_explained_variance = np.sort(np.random.rand(n_pcs_simulated))[::-1]
-            sim_explained_variance = sim_explained_variance / sim_explained_variance.sum() * n_pcs_simulated * 0.7 # Assurer que c'est plausible
+            mock_pca_obj.components_ = sim_components_t.T # Transposer pour (n_components, n_features)
+            
+            sim_explained_variance = np.sort(np.random.rand(n_pcs_simulated_obj))[::-1]
+            # Normaliser pour que la variance expliquée soit plausible (ex: somme < n_pcs_simulated_obj)
+            if sim_explained_variance.sum() > 0:
+                sim_explained_variance = (sim_explained_variance / sim_explained_variance.sum()) * n_pcs_simulated_obj * 0.7 
+            else: # Éviter division par zéro si toutes les variances simulées sont nulles
+                sim_explained_variance = np.zeros(n_pcs_simulated_obj)
+
             mock_pca_obj.explained_variance_ = sim_explained_variance
 
+            # S'assurer que coords_df a le bon nombre de colonnes si mock_pca_obj a moins de 2 composantes
+            # et que n_pcs_to_simulate_coords était potentiellement plus grand
+            if mock_pca_obj.components_.shape[0] < coords_df.shape[1]:
+                coords_df = coords_df.iloc[:, :mock_pca_obj.components_.shape[0]]
+                new_pc_cols = [f"PC{i+1}" for i in range(mock_pca_obj.components_.shape[0])]
+                coords_df.columns = new_pc_cols
         else: 
             mock_pca_obj.components_ = np.array([])
             mock_pca_obj.explained_variance_ = np.array([])
-            if n_samples > 0 and coords_df.empty: 
-                coords_df = pd.DataFrame(np.random.rand(n_samples, 2), columns=['PC1', 'PC2'])
-        
-        # S'assurer que coords_df a le bon nombre de colonnes si pca_obj a moins de 2 composantes
-        if mock_pca_obj.explained_variance_.shape[0] < 2 and not coords_df.empty:
-            if mock_pca_obj.explained_variance_.shape[0] == 1 and 'PC2' in coords_df.columns:
-                coords_df = coords_df[['PC1']] # Garder seulement PC1
-            elif mock_pca_obj.explained_variance_.shape[0] == 0:
-                 coords_df = pd.DataFrame(index=coords_df.index)
+            # Si pas de traits numériques, coords_df doit être vide
+            coords_df = pd.DataFrame(index=sub_df.index)
 
 
         return labels, mock_pca_obj, coords_df, X_scaled
@@ -125,14 +130,12 @@ div[data-testid="stDataEditor"] .glideDataEditor-body .dvn-scroll-inner > div:fi
     font-weight: normal !important;      /* Poids normal pour l'éditeur */
 }
 
-/* Ajuster la taille des boutons de sélection d'habitat (si on les utilise ailleurs) */
-/* Pour les boutons de sélection d'habitat spécifiques, nous utiliserons des clés ou des classes CSS si nécessaire */
 .habitat-select-button button {
     font-size: 13px !important;
-    padding: 0.25rem 0.6rem !important; /* Ajuster le padding */
+    padding: 0.25rem 0.6rem !important; 
     line-height: 1.4;
-    width: 100%; /* Pour qu'ils prennent toute la largeur de la colonne */
-    border-radius: 0.5rem; /* Coins arrondis */
+    width: 100%; 
+    border-radius: 0.5rem; 
 }
 </style>
 """, unsafe_allow_html=True)
@@ -161,11 +164,10 @@ def load_data(file_path="data_ref.csv"):
                 'Trait_Num_1': np.random.rand(30) * 10,
                 'Trait_Num_2': np.random.randint(1, 100, 30),
                 'Trait_Cat_1': np.random.choice(['X', 'Y', 'Z'], 30),
-                'Humidité_édaphique': np.random.rand(30) * 5 + 1, # Ajout de traits simulés
+                'Humidité_édaphique': np.random.rand(30) * 5 + 1, 
                 'Matière_organique': np.random.rand(30) * 10,
                 'Lumière': np.random.rand(30) * 1000
             })
-            # Ajouter quelques espèces spécifiques pour le test des avertissements
             data.loc[len(data)] = ['Rhamnus pumila', 5.0, 50, 'X', 3, 5, 500]
             data.loc[len(data)] = ['Vulpia sp.', 2.0, 20, 'Y', 2, 2, 800]
             return data
@@ -222,12 +224,12 @@ def load_ecology_data(file_path="data_ecologie_espece.csv"):
             usecols=[0, 1],
             names=['Espece', 'Description_Ecologie'],
             encoding='utf-8-sig',
-            keep_default_na=False, # Important pour ne pas interpréter "" comme NaN trop tôt
-            na_values=[''] # Définir explicitement les chaînes vides comme NaN si nécessaire après lecture
+            keep_default_na=False, 
+            na_values=[''] 
         )
-        eco_data = eco_data.dropna(subset=['Espece']) # Supprimer les lignes où l'espèce est NaN
+        eco_data = eco_data.dropna(subset=['Espece']) 
         eco_data['Espece'] = eco_data['Espece'].astype(str).str.strip()
-        eco_data = eco_data[eco_data['Espece'] != ""] # Filtrer les noms d'espèces vides après strip
+        eco_data = eco_data[eco_data['Espece'] != ""] 
 
         if eco_data.empty:
             st.warning(f"Le fichier écologique '{file_path}' est vide ou ne contient aucune donnée d'espèce valide.")
@@ -241,8 +243,8 @@ def load_ecology_data(file_path="data_ecologie_espece.csv"):
             .str.lower()
         )
         eco_data = eco_data.drop_duplicates(subset=['Espece_norm'], keep='first')
-        eco_data = eco_data.set_index('Espece_norm') # Espece_norm devient l'index
-        return eco_data[["Description_Ecologie"]] # Retourne DF avec Espece_norm comme index
+        eco_data = eco_data.set_index('Espece_norm') 
+        return eco_data[["Description_Ecologie"]] 
     
     except FileNotFoundError:
         print(f"AVERTISSEMENT: Fichier de données écologiques '{file_path}' non trouvé.")
@@ -251,7 +253,7 @@ def load_ecology_data(file_path="data_ecologie_espece.csv"):
     except pd.errors.EmptyDataError:
         st.warning(f"Le fichier écologique '{file_path}' est vide.")
         return pd.DataFrame(columns=['Description_Ecologie']).set_index(pd.Index([], name='Espece_norm'))
-    except ValueError as ve: # Peut arriver si usecols ne correspond pas, etc.
+    except ValueError as ve: 
         print(f"AVERTISSEMENT: Erreur de valeur lors de la lecture du fichier '{file_path}'. Détails: {ve}.")
         st.toast(f"Erreur format fichier écologique '{file_path}'.", icon="🔥")
         return pd.DataFrame(columns=['Description_Ecologie']).set_index(pd.Index([], name='Espece_norm'))
@@ -466,16 +468,23 @@ if selected_habitat_idx_for_analysis is not None and \
                             else: 
                                 st.error("Coordonnées PCA (core.analyse) : format ou longueur incorrecte.")
                                 st.session_state.run_main_analysis_once = False; st.session_state.analysis_has_run_for_current_selection = False;
-                                coords_df = pd.DataFrame() 
+                                coords_df = pd.DataFrame(index=st.session_state.sub.index if not st.session_state.sub.empty else None)
+
 
                         if st.session_state.run_main_analysis_once: 
                             current_pdf = coords_df.copy()
+                            # S'assurer que current_pdf (coords_df) n'est pas vide avant de continuer
                             if not current_pdf.empty:
                                 if len(labels) == len(current_pdf): current_pdf["Cluster"] = labels.astype(str)
                                 else: current_pdf["Cluster"] = np.zeros(len(current_pdf)).astype(str) if len(current_pdf) > 0 else pd.Series(dtype=str)
                                 
                                 if 'Espece' in st.session_state.sub.columns:
-                                    current_pdf["Espece_Ref"] = st.session_state.sub["Espece"].values[:len(current_pdf)]
+                                    # S'assurer que l'index de sub correspond à celui de current_pdf si ce dernier a été créé à partir de sub.index
+                                    if current_pdf.index.equals(st.session_state.sub.index):
+                                        current_pdf["Espece_Ref"] = st.session_state.sub["Espece"]
+                                    else: # Fallback si les index ne correspondent pas (moins probable avec la correction de coords_df)
+                                        current_pdf["Espece_Ref"] = st.session_state.sub["Espece"].values[:len(current_pdf)]
+
                                     current_pdf["Espece_User"] = current_pdf["Espece_Ref"].apply(lambda full_ref_name: user_input_binom_to_raw_map.get(" ".join(str(full_ref_name).split()[:2]).lower(),str(full_ref_name)))
                                 else: 
                                     current_pdf["Espece_Ref"] = [f"Espèce_Ref_{i}" for i in range(len(current_pdf))]
@@ -499,21 +508,14 @@ if selected_habitat_idx_for_analysis is not None and \
                                     
                                     pca_components_values = pca_results.components_ # (n_components, n_features)
                                     explained_variance_values = pca_results.explained_variance_ # (n_components,)
+                                   
+                                    # Correction du calcul des loadings:
+                                    eigenvectors_matrix = pca_components_values.T # Forme (n_features, n_components)
+                                    sqrt_eigenvalues_vector = np.sqrt(explained_variance_values) # Forme (n_components,)
                                     
-                                    # Loadings: (n_features, n_components)
-                                    # Chaque colonne est un vecteur de loadings pour une composante.
-                                    # Chaque ligne est un vecteur de loadings pour une variable.
-                                    # Correct calculation for loadings: components.T * sqrt(explained_variance)
-                                    # components_ are (n_components, n_features)
-                                    # explained_variance_ is (n_components,)
-                                    # loadings should be (n_features, n_components)
-                                    
-                                    # Si pca_components_values est (n_features, n_components) comme dans la simulation précédente
-                                    # loadings = pca_components_values * np.sqrt(explained_variance_values[np.newaxis, :])
-                                    
-                                    # Si pca_components_values est (n_components, n_features) comme dans scikit-learn
-                                    loadings = pca_components_values.T * np.sqrt(explained_variance_values[:, np.newaxis])
-                                    loadings = loadings.T # Transposer pour avoir (n_features, n_components)
+                                    # Broadcasting: (n_features, n_components) * (n_components,)
+                                    # Ceci met à l'échelle chaque colonne de eigenvectors_matrix par la sqrt_eigenvalue correspondante
+                                    loadings = eigenvectors_matrix * sqrt_eigenvalues_vector
                                                                         
                                     communal = (loadings**2).sum(axis=1) # Somme sur les composantes pour chaque variable
                                     
@@ -521,12 +523,11 @@ if selected_habitat_idx_for_analysis is not None and \
                                     
                                     if len(communal) == len(trait_columns_for_communal):
                                         communal_percent = (communal * 100).round(0).astype(int)
-                                        # CORRECTION: Borner les communalités entre 0 et 100%
                                         communal_percent_clipped = np.clip(communal_percent, 0, 100)
                                         
                                         st.session_state.vip_data_df_for_calc = pd.DataFrame({
                                             "Variable": trait_columns_for_communal,
-                                            "Communalité (%)": communal_percent_clipped, # Utiliser la valeur bornée
+                                            "Communalité (%)": communal_percent_clipped, 
                                         }).sort_values("Communalité (%)", ascending=False).reset_index(drop=True)
                                     else: 
                                         st.session_state.vip_data_df_for_calc = pd.DataFrame(columns=["Variable", "Communalité (%)"])
@@ -567,8 +568,8 @@ if selected_habitat_idx_for_analysis is not None and \
                                     st.session_state.vip_data_df_interactive = pd.DataFrame(columns=["Variable", "Communalité (%)", "Axe X", "Axe Y"])
                                 st.session_state.vip_data_df_interactive_snapshot_for_comparison = st.session_state.vip_data_df_interactive.copy()
                             else: 
-                                st.warning("L'analyse n'a pas produit de coordonnées PCA (coords_df vide).")
-                                st.session_state.run_main_analysis_once = False
+                                st.warning("L'analyse n'a pas produit de coordonnées PCA (coords_df vide ou invalide).")
+                                st.session_state.run_main_analysis_once = False # Réinitialiser si coords_df est vide
                                 st.session_state.analysis_has_run_for_current_selection = False
                 except Exception as e:
                     st.error(f"Erreur lors de l'analyse principale : {e}"); st.exception(e)
@@ -744,13 +745,16 @@ if st.session_state.run_main_analysis_once:
        "Espece_User" in pdf_display_pca.columns and "Ecologie" in pdf_display_pca.columns:
         
         y_pca_col = None
-        if "PC2" in pdf_display_pca.columns:
+        if "PC2" in pdf_display_pca.columns: # Priorité à PC2 si elle existe
             y_pca_col = "PC2"
-        elif len(pdf_display_pca.columns) > 1 and pdf_display_pca.columns[1].startswith("PC"):
-             y_pca_col = pdf_display_pca.columns[1]
+        # Fallback si PC2 n'existe pas mais qu'il y a au moins une autre colonne PC (ex: si PCA ne donne qu'1 comp.)
+        # Ce fallback est moins pertinent si on s'attend à au moins 2 PCs pour un scatter plot.
+        # elif len(pdf_display_pca.columns) > 1 and any(col.startswith("PC") for col in pdf_display_pca.columns if col != "PC1"):
+        #     potential_y_cols = [col for col in pdf_display_pca.columns if col.startswith("PC") and col != "PC1"]
+        #     if potential_y_cols: y_pca_col = potential_y_cols[0]
 
 
-        if y_pca_col: 
+        if "PC1" in pdf_display_pca.columns and y_pca_col : # S'assurer que PC1 et y_pca_col sont valides
             fig_pca = px.scatter(pdf_display_pca, x="PC1", y=y_pca_col, color="Cluster", text="Espece_User", 
                                  hover_name="Espece_User", custom_data=["Espece_User", "Ecologie"], 
                                  template="plotly_dark", height=500, color_discrete_sequence=COLOR_SEQUENCE)
@@ -778,10 +782,10 @@ if st.session_state.run_main_analysis_once:
                                                          showlegend=False, hoverinfo='skip'))
                         except Exception as e: print(f"Erreur calcul Hull ACP pour cluster {cluster_label}: {e}")
             fig_pca.update_layout(title_text="Plot PCA des espèces", title_x=0.5, legend_title_text='Cluster', dragmode='pan')
-        else:
+        else: # Cas où PC1 ou y_pca_col (souvent PC2) n'est pas disponible pour le plot
             fig_pca = None 
             if not pdf_display_pca.empty : 
-                 with col_pca_plot_area: st.warning("Moins de deux composantes principales disponibles pour le graphique PCA.")
+                 with col_pca_plot_area: st.warning("Moins de deux composantes principales disponibles pour le graphique PCA. Le graphique ne peut être affiché.")
 
     X_for_dendro_display = st.session_state.get('X_for_dendro', np.array([]))
     sub_display_dendro = st.session_state.get('sub', pd.DataFrame())
@@ -817,9 +821,7 @@ with col_pca_plot_area:
     elif st.session_state.run_main_analysis_once and st.session_state.get('sub', pd.DataFrame()).empty:
         st.warning("L'analyse n'a pas produit de résultats affichables pour le PCA (pas d'espèces traitées ou PCA impossible).")
     elif st.session_state.run_main_analysis_once and fig_pca is None and not st.session_state.get('pdf', pd.DataFrame()).empty : 
-        # Ce cas est pour quand pdf existe mais fig_pca n'a pas pu être créé (ex: <2 PCs)
-        # Le message est déjà affiché dans le bloc de création de fig_pca
-        pass
+        pass # Message déjà géré dans le bloc de création de fig_pca
     elif st.session_state.run_main_analysis_once :
          st.warning("Le graphique PCA n'a pas pu être généré. Vérifiez les données d'entrée et les paramètres.")
 
