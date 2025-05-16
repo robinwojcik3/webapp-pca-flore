@@ -591,6 +591,7 @@ if st.session_state.run_main_analysis_once and not st.session_state.get('sub', p
         df_editor_source_interactive = st.session_state.get('vip_data_df_interactive', pd.DataFrame())
 
         if not df_editor_source_interactive.empty:
+            # S'assurer que le snapshot est compatible ou le recréer
             snapshot_cols = list(st.session_state.get('vip_data_df_interactive_snapshot_for_comparison', pd.DataFrame()).columns)
             current_cols = list(df_editor_source_interactive.columns)
             if 'vip_data_df_interactive_snapshot_for_comparison' not in st.session_state or snapshot_cols != current_cols:
@@ -610,44 +611,71 @@ if st.session_state.run_main_analysis_once and not st.session_state.get('sub', p
                 num_rows="fixed"
             )
             
-            made_change_in_interactive_axes = False
-            new_x_trait_interactive = st.session_state.x_axis_trait_interactive
-            new_y_trait_interactive = st.session_state.y_axis_trait_interactive
+            made_change_in_interactive_axes = False # Flag pour indiquer si un rerun est nécessaire
 
-            selected_x_vars_interactive = edited_df_interactive[edited_df_interactive["Axe X"]]["Variable"].tolist()
-            if selected_x_vars_interactive:
-                chosen_x = selected_x_vars_interactive[-1] 
-                if chosen_x != st.session_state.x_axis_trait_interactive:
-                    new_x_trait_interactive = chosen_x
+            # Logique pour l'axe X
+            current_x_selection_from_state = st.session_state.x_axis_trait_interactive
+            x_vars_checked_in_editor = edited_df_interactive[edited_df_interactive["Axe X"]]["Variable"].tolist()
+            
+            new_x_selection_candidate = current_x_selection_from_state # Default to current state
+
+            if not x_vars_checked_in_editor: # Aucune case X cochée dans l'éditeur
+                if current_x_selection_from_state is not None: # S'il y avait une sélection avant
+                    new_x_selection_candidate = None
                     made_change_in_interactive_axes = True
-                elif len(selected_x_vars_interactive) > 1 : 
-                    made_change_in_interactive_axes = True 
-            elif st.session_state.x_axis_trait_interactive is not None: 
-                new_x_trait_interactive = None
+            elif len(x_vars_checked_in_editor) == 1: # Exactement une case X cochée
+                single_checked_x = x_vars_checked_in_editor[0]
+                if single_checked_x != current_x_selection_from_state:
+                    new_x_selection_candidate = single_checked_x
+                    made_change_in_interactive_axes = True
+            else: # Plus d'une case X cochée dans l'éditeur
+                # Prioriser la variable qui n'était PAS la sélection précédente
+                potential_new_x_selections = [v for v in x_vars_checked_in_editor if v != current_x_selection_from_state]
+                if potential_new_x_selections:
+                    new_x_selection_candidate = potential_new_x_selections[0] # Choisir la "nouvelle"
+                else: # Fallback: si toutes les sélections incluent l'ancienne, ou si l'ancienne était None
+                    new_x_selection_candidate = x_vars_checked_in_editor[-1] # Prendre la dernière de la liste
+                made_change_in_interactive_axes = True # Forcer la mise à jour pour assurer une seule sélection
+
+            st.session_state.x_axis_trait_interactive = new_x_selection_candidate
+
+
+            # Logique pour l'axe Y (symétrique à X)
+            current_y_selection_from_state = st.session_state.y_axis_trait_interactive
+            y_vars_checked_in_editor = edited_df_interactive[edited_df_interactive["Axe Y"]]["Variable"].tolist()
+
+            new_y_selection_candidate = current_y_selection_from_state # Default to current state
+
+            if not y_vars_checked_in_editor: # Aucune case Y cochée
+                if current_y_selection_from_state is not None:
+                    new_y_selection_candidate = None
+                    made_change_in_interactive_axes = True
+            elif len(y_vars_checked_in_editor) == 1: # Exactement une case Y cochée
+                single_checked_y = y_vars_checked_in_editor[0]
+                if single_checked_y != current_y_selection_from_state:
+                    new_y_selection_candidate = single_checked_y
+                    made_change_in_interactive_axes = True
+            else: # Plus d'une case Y cochée
+                potential_new_y_selections = [v for v in y_vars_checked_in_editor if v != current_y_selection_from_state]
+                if potential_new_y_selections:
+                    new_y_selection_candidate = potential_new_y_selections[0]
+                else:
+                    new_y_selection_candidate = y_vars_checked_in_editor[-1]
                 made_change_in_interactive_axes = True
             
-            selected_y_vars_interactive = edited_df_interactive[edited_df_interactive["Axe Y"]]["Variable"].tolist()
-            if selected_y_vars_interactive:
-                chosen_y = selected_y_vars_interactive[-1]
-                if chosen_y != st.session_state.y_axis_trait_interactive:
-                    new_y_trait_interactive = chosen_y
-                    made_change_in_interactive_axes = True
-                elif len(selected_y_vars_interactive) > 1 :
-                    made_change_in_interactive_axes = True
-            elif st.session_state.y_axis_trait_interactive is not None:
-                new_y_trait_interactive = None
-                made_change_in_interactive_axes = True
+            st.session_state.y_axis_trait_interactive = new_y_selection_candidate
 
+            # Si un changement a été détecté pour X ou Y, mettre à jour le DataFrame source et rerun
             if made_change_in_interactive_axes:
-                st.session_state.x_axis_trait_interactive = new_x_trait_interactive
-                st.session_state.y_axis_trait_interactive = new_y_trait_interactive
+                df_updated_for_editor = df_editor_source_interactive.copy() # Partir de la source originale de cet affichage
+                df_updated_for_editor["Axe X"] = (df_updated_for_editor["Variable"] == st.session_state.x_axis_trait_interactive)
+                df_updated_for_editor["Axe Y"] = (df_updated_for_editor["Variable"] == st.session_state.y_axis_trait_interactive)
                 
-                df_updated_for_editor = df_editor_source_interactive.copy()
-                df_updated_for_editor["Axe X"] = (df_updated_for_editor["Variable"] == new_x_trait_interactive)
-                df_updated_for_editor["Axe Y"] = (df_updated_for_editor["Variable"] == new_y_trait_interactive)
-                st.session_state.vip_data_df_interactive = df_updated_for_editor
-                st.session_state.vip_data_df_interactive_snapshot_for_comparison = df_updated_for_editor.copy()
+                st.session_state.vip_data_df_interactive = df_updated_for_editor # Mettre à jour l'état principal
+                st.session_state.vip_data_df_interactive_snapshot_for_comparison = df_updated_for_editor.copy() # Mettre à jour le snapshot
                 st.rerun()
+            # Gérer le cas où aucune case n'est cochée ou si d'autres types d'éditions (non prévues ici) ont eu lieu
+            # et que cela ne correspond pas au snapshot, mais sans changer les sélections X/Y.
             elif not edited_df_interactive.equals(st.session_state.vip_data_df_interactive_snapshot_for_comparison):
                  st.session_state.vip_data_df_interactive_snapshot_for_comparison = edited_df_interactive.copy()
         else: 
