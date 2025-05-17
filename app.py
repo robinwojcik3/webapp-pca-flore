@@ -1110,79 +1110,137 @@ elif st.session_state.run_main_analysis_once:
 # ---------------------------------------------------------------------------- #
 # ÉTAPE 5: ANALYSE DES CO-OCCURRENCES D'ESPÈCES (basée sur les syntaxons)
 # ---------------------------------------------------------------------------- #
-# Cette section s'exécute si l'analyse principale a eu lieu, que des espèces ont été traitées ('sub' non vide)
-# et que les données des syntaxons ont été chargées.
+def style_cooccurrence_row(row, max_overall_count, vmin_count=1):
+    """Applique un style de fond coloré aux cellules des voisins en fonction de leur compte de co-occurrence."""
+    styles = pd.Series('', index=row.index)
+    # Couleurs pour le dégradé: du gris foncé (proche du noir) au rouge foncé
+    color_start_rgb = (40, 40, 40)  # Gris très foncé
+    color_end_rgb = (200, 50, 50)    # Rouge foncé modéré
+
+    for col_num in [1, 2, 3]:
+        display_col_name = f'Voisin {col_num}' # Nom de la colonne affichée (ex: 'Voisin 1')
+        count_val = row[f'Voisin {col_num} Compte'] # Accéder à la valeur du compte directement
+
+        if pd.notna(count_val) and count_val > 0:
+            current_count = int(count_val)
+            # Calculer le ratio pour l'interpolation des couleurs
+            if max_overall_count == vmin_count: # Cas où tous les comptes > 0 sont égaux à vmin_count (généralement 1)
+                ratio = 1.0 if current_count >= vmin_count else 0.0
+            elif max_overall_count > vmin_count:
+                ratio = (current_count - vmin_count) / (max_overall_count - vmin_count)
+                ratio = max(0.0, min(ratio, 1.0)) # Assurer que le ratio est entre 0 et 1
+            else: # Si max_overall_count <= vmin_count (ou si current_count est <= 0, déjà filtré)
+                ratio = 0.0
+            
+            # Interpoler les couleurs RGB
+            r = int(color_start_rgb[0] + ratio * (color_end_rgb[0] - color_start_rgb[0]))
+            g = int(color_start_rgb[1] + ratio * (color_end_rgb[1] - color_start_rgb[1]))
+            b = int(color_start_rgb[2] + ratio * (color_end_rgb[2] - color_start_rgb[2]))
+            styles[display_col_name] = f'background-color: rgb({r},{g},{b})'
+        else:
+            # Pas de style particulier si pas de co-occurrence ou compte nul
+            styles[display_col_name] = 'background-color: none' 
+    return styles
+
 if st.session_state.run_main_analysis_once and \
    not st.session_state.get('sub', pd.DataFrame()).empty and \
-   syntaxon_data_list: # syntaxon_data_list est chargé au début du script
+   syntaxon_data_list:
 
     st.markdown("---")
     st.subheader("Étape 5: Analyse des Co-occurrences d'Espèces (basée sur les listes de syntaxons)")
 
-    # Espèces principales : noms originaux des espèces issues des relevés de l'utilisateur et trouvées dans data_ref.csv
-    # Ces noms sont ceux affichés à l'utilisateur, ex: "Rhamnus pumila"
     principal_species_original_names_from_sub = st.session_state.sub['Espece_Ref_Original'].unique()
+    cooccurrence_results_list = []
 
-    cooccurrence_results_list = [] # Pour stocker les résultats de co-occurrence
-
-    # Pour chaque espèce principale identifiée dans les relevés de l'utilisateur
     for principal_species_original in principal_species_original_names_from_sub:
-        # Normaliser le nom de l'espèce principale pour la comparaison avec les données des syntaxons
-        # (ex: "Rhamnus pumila" -> "rhamnus pumila")
         principal_species_normalized = normalize_species_name_for_villaret(principal_species_original)
-        
-        if not principal_species_normalized: # Si la normalisation échoue (nom invalide)
+        if not principal_species_normalized:
             continue
 
-        co_occurrence_counts_for_this_principal = defaultdict(int) # Compteur pour les espèces co-occurrentes
-        
-        # Parcourir chaque enregistrement de syntaxon (dictionnaire avec 'id', 'name', 'species_set')
+        co_occurrence_counts_for_this_principal = defaultdict(int)
         for syntaxon_record in syntaxon_data_list:
-            # Vérifier si l'espèce principale (normalisée) est présente dans l'ensemble des espèces du syntaxon
             if principal_species_normalized in syntaxon_record['species_set']:
-                # Si oui, parcourir toutes les autres espèces dans ce même syntaxon
                 for other_species_in_syntaxon_normalized in syntaxon_record['species_set']:
-                    # Ne pas compter l'espèce principale elle-même comme co-occurrente
                     if other_species_in_syntaxon_normalized != principal_species_normalized:
-                        # Incrémenter le compteur pour cette espèce co-occurrente
-                        # Les clés du compteur sont les noms normalisés des espèces co-occurrentes
                         co_occurrence_counts_for_this_principal[other_species_in_syntaxon_normalized] += 1
         
-        # Si des co-occurrences ont été trouvées pour cette espèce principale
+        current_result_row = {'Espèce Principale (issue des relevés)': principal_species_original}
         if co_occurrence_counts_for_this_principal:
-            # Trier les espèces co-occurrentes par leur fréquence (nombre de syntaxons partagés), en ordre décroissant
             sorted_co_occurrences = sorted(co_occurrence_counts_for_this_principal.items(), key=lambda item: item[1], reverse=True)
             
-            # Extraire les noms (normalisés) des 3 voisins les plus fréquents
-            top_3_neighbors_normalized = [item[0] for item in sorted_co_occurrences[:3]]
-            
-            # Préparer la liste pour l'affichage (avec None si moins de 3 voisins)
-            # Les noms affichés pour les voisins seront ceux (normalisés) trouvés dans data_villaret.csv
-            neighbors_for_display = top_3_neighbors_normalized + [None] * (3 - len(top_3_neighbors_normalized))
-            
-            cooccurrence_results_list.append({
-                'Espèce Principale (issue des relevés)': principal_species_original, # Nom original de l'espèce principale
-                'Voisin 1 le plus fréquent (syntaxons)': neighbors_for_display[0],
-                'Voisin 2 le plus fréquent (syntaxons)': neighbors_for_display[1],
-                'Voisin 3 le plus fréquent (syntaxons)': neighbors_for_display[2]
-            })
-        else: # Si aucune co-occurrence n'a été trouvée pour cette espèce principale
-             cooccurrence_results_list.append({
-                'Espèce Principale (issue des relevés)': principal_species_original,
-                'Voisin 1 le plus fréquent (syntaxons)': None,
-                'Voisin 2 le plus fréquent (syntaxons)': None,
-                'Voisin 3 le plus fréquent (syntaxons)': None
-            })
+            for i in range(3): # Pour Voisin 1, Voisin 2, Voisin 3
+                if i < len(sorted_co_occurrences):
+                    name, count = sorted_co_occurrences[i]
+                    current_result_row[f'Voisin {i+1} Nom'] = name
+                    current_result_row[f'Voisin {i+1} Compte'] = count
+                else: # Moins de 3 voisins trouvés
+                    current_result_row[f'Voisin {i+1} Nom'] = None
+                    current_result_row[f'Voisin {i+1} Compte'] = pd.NA # Utiliser pd.NA pour les comptes manquants
+        else: # Aucune co-occurrence trouvée
+            for i in range(3):
+                current_result_row[f'Voisin {i+1} Nom'] = None
+                current_result_row[f'Voisin {i+1} Compte'] = pd.NA
+        cooccurrence_results_list.append(current_result_row)
 
-    # Afficher le tableau des résultats de co-occurrence
     if cooccurrence_results_list:
-        cooccurrence_df = pd.DataFrame(cooccurrence_results_list)
-        st.markdown("Ce tableau présente, pour chaque espèce de vos relevés (colonne 1), les trois espèces qui lui sont le plus fréquemment associées au sein des listes d'espèces caractéristiques des syntaxons de référence (`data_villaret.csv`).")
-        st.dataframe(cooccurrence_df, use_container_width=True, hide_index=True)
+        # DataFrame brut avec noms et comptes séparés (pour le style et le calcul du max)
+        raw_cooccurrence_df = pd.DataFrame(cooccurrence_results_list)
+
+        # Déterminer le max des co-occurrences pour l'échelle de couleurs
+        all_counts_for_styling = []
+        for col_num in [1, 2, 3]:
+            counts_in_col = raw_cooccurrence_df[f'Voisin {col_num} Compte'].dropna().astype(int)
+            all_counts_for_styling.extend(counts_in_col[counts_in_col > 0].tolist())
+        
+        max_overall_cooccurrence = max(all_counts_for_styling) if all_counts_for_styling else 0
+        min_cooccurrence_for_color = 1 # Les comptes de 0 ne seront pas colorés en rouge
+
+        # Préparer le DataFrame pour l'affichage (avec noms et comptes combinés)
+        # Et inclure les colonnes de comptes bruts pour que la fonction de style y accède
+        df_for_display_and_styling_data = []
+        for _, row in raw_cooccurrence_df.iterrows():
+            display_row = {'Espèce Principale (issue des relevés)': row['Espèce Principale (issue des relevés)']}
+            for i in [1, 2, 3]:
+                nom = row[f'Voisin {i+1} Nom']
+                compte = row[f'Voisin {i+1} Compte']
+                
+                # Colonne pour affichage (Nom - Compte)
+                if pd.notna(nom) and pd.notna(compte) and compte > 0:
+                    display_row[f'Voisin {i+1}'] = f"{str(nom).capitalize()} - {compte}" # Capitaliser le nom pour l'affichage
+                else:
+                    display_row[f'Voisin {i+1}'] = "-" # Afficher "-" si pas de voisin ou compte nul
+                
+                # Colonne de compte brut pour le styler (doit correspondre à ce que style_cooccurrence_row attend)
+                display_row[f'Voisin {i+1} Compte'] = compte if pd.notna(compte) else 0 
+            df_for_display_and_styling_data.append(display_row)
+        
+        cooccurrence_display_df_styled = pd.DataFrame(df_for_display_and_styling_data)
+
+        st.markdown("Ce tableau présente, pour chaque espèce de vos relevés (colonne 1), les trois espèces qui lui sont le plus fréquemment associées au sein des listes d'espèces caractéristiques des syntaxons de référence (`data_villaret.csv`). Le nombre après le tiret indique le nombre de syntaxons partagés. La couleur de fond indique l'intensité de cette co-occurrence (du gris foncé au rouge).")
+        
+        # Colonnes à effectivement montrer à l'utilisateur (sans les colonnes de comptes bruts)
+        final_columns_to_show = ['Espèce Principale (issue des relevés)', 'Voisin 1', 'Voisin 2', 'Voisin 3']
+        
+        # Appliquer le style
+        # La fonction style_cooccurrence_row accède aux colonnes 'Voisin X Compte' du DataFrame qu'on lui passe.
+        styled_object = cooccurrence_display_df_styled.style.apply(
+            style_cooccurrence_row,
+            max_overall_count=max_overall_cooccurrence,
+            vmin_count=min_cooccurrence_for_color,
+            axis=1, # Appliquer par ligne
+            # Le subset ici se réfère aux colonnes du DataFrame sur lesquelles le style est appliqué (celles qui reçoivent une valeur de style)
+            # La fonction style_cooccurrence_row génère des styles pour 'Voisin 1', 'Voisin 2', 'Voisin 3'
+            subset=pd.IndexSlice[:, ['Voisin 1', 'Voisin 2', 'Voisin 3']]
+        ).format(na_rep="-") # Remplacer les pd.NA restants par "-"
+
+        # Cacher les colonnes de comptes bruts avant l'affichage
+        columns_to_hide = [col for col in cooccurrence_display_df_styled.columns if 'Compte' in col and col not in final_columns_to_show]
+        
+        st.dataframe(styled_object.hide(axis="columns", subset=columns_to_hide), use_container_width=True)
+
     else:
         st.info("Aucune donnée de co-occurrence à afficher pour les espèces sélectionnées et les syntaxons disponibles.")
 
-# Message si l'analyse principale a eu lieu, mais que les données des syntaxons ne sont pas disponibles
 elif st.session_state.run_main_analysis_once and not syntaxon_data_list:
     st.markdown("---")
     st.subheader("Étape 5: Analyse des Co-occurrences d'Espèces (basée sur les listes de syntaxons)")
