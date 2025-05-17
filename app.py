@@ -407,9 +407,9 @@ if st.session_state.selected_habitats_indices and \
                     match_in_ref = ref_binom_series[ref_binom_series == binom_species_name]
                     if not match_in_ref.empty:
                         ref_idx = match_in_ref.index[0] 
-                        trait_data = ref.loc[ref_idx].to_dict() # This includes 'Espece' and all traits from ref
+                        trait_data = ref.loc[ref_idx].to_dict() 
                         trait_data['Source_Habitat'] = habitat_name
-                        trait_data['Espece_Ref_Original'] = ref.loc[ref_idx, 'Espece'] # Explicitly store original ref species name
+                        trait_data['Espece_Ref_Original'] = ref.loc[ref_idx, 'Espece'] 
                         trait_data['Espece_User_Input_Raw'] = raw_species_name
                         all_species_data_for_analysis.append(trait_data)
                     else:
@@ -422,12 +422,7 @@ if st.session_state.selected_habitats_indices and \
         st.session_state.run_main_analysis_once = False 
         st.session_state.analysis_has_run_for_current_selection = False 
     else:
-        # st.session_state.sub will contain ALL columns: original traits from ref (numeric and categorical),
-        # plus 'Source_Habitat', 'Espece_Ref_Original', 'Espece_User_Input_Raw'.
-        # The original 'Espece' column from ref is also present if it was in ref.loc[ref_idx].to_dict().
         st.session_state.sub = pd.DataFrame(all_species_data_for_analysis)
-        # Ensure the index is reset for st.session_state.sub so it's a simple range index,
-        # which will be inherited by coords_df and allow direct merging/mapping.
         st.session_state.sub.reset_index(drop=True, inplace=True)
 
         for habitat_name, not_found_list in species_not_found_in_ref_detailed.items():
@@ -447,11 +442,6 @@ if st.session_state.selected_habitats_indices and \
             st.session_state.run_main_analysis_once = False; st.session_state.analysis_has_run_for_current_selection = False;
         else:
             try:
-                # **CORRECTION APPLIQUÉE ICI**
-                # Préparer la DataFrame spécifiquement pour core.analyse
-                # Elle doit avoir 'Espece' comme première colonne, suivie UNIQUEMENT des traits numériques.
-
-                # 1. Identifier les noms des traits numériques à partir du DataFrame de référence 'ref'
                 if ref.empty:
                     st.error("Le DataFrame de référence 'ref' est vide. Impossible de déterminer les traits numériques.")
                     st.session_state.run_main_analysis_once = False
@@ -459,65 +449,67 @@ if st.session_state.selected_habitats_indices and \
                     raise ValueError("DataFrame 'ref' vide, impossible de préparer les données pour core.analyse.")
 
                 numeric_trait_names_from_ref = ref.select_dtypes(include=np.number).columns.tolist()
-
-                # 2. Créer une copie de st.session_state.sub pour la préparation
                 df_for_core_preparation = st.session_state.sub.copy()
 
-                # 3. S'assurer qu'une colonne 'Espece' (identifiant) existe. Utiliser 'Espece_Ref_Original'.
                 if 'Espece_Ref_Original' in df_for_core_preparation.columns:
                     df_for_core_preparation['Espece_ID_Core'] = df_for_core_preparation['Espece_Ref_Original']
-                elif 'Espece' in df_for_core_preparation.columns: # Fallback si Espece_Ref_Original n'est pas là
+                elif 'Espece' in df_for_core_preparation.columns: 
                     df_for_core_preparation['Espece_ID_Core'] = df_for_core_preparation['Espece']
                 else:
                     st.error("Colonne d'identification 'Espece' ou 'Espece_Ref_Original' manquante pour l'analyse.")
                     raise ValueError("Identifiant 'Espece' manquant pour core.analyse.")
 
-                # 4. Définir la liste des traits numériques réels à utiliser pour l'ACP.
-                # Ce sont les traits numériques de 'ref' qui sont aussi présents dans les données collectées.
                 actual_numeric_traits_for_pca = [
                     trait for trait in numeric_trait_names_from_ref if trait in df_for_core_preparation.columns
                 ]
                 
-                # 5. Construire la DataFrame finale pour core.analyse : 'Espece_ID_Core' puis les traits numériques.
-                # L'ordre est important si core.py utilise iloc.
                 columns_for_core_call = ['Espece_ID_Core'] + actual_numeric_traits_for_pca
                 sub_for_analysis_call_prepared = df_for_core_preparation[columns_for_core_call]
-                # Renommer 'Espece_ID_Core' en 'Espece' si core.py s'attend à ce nom exact.
                 sub_for_analysis_call_prepared = sub_for_analysis_call_prepared.rename(columns={'Espece_ID_Core': 'Espece'})
 
-
-                # 6. Vérifier s'il y a des traits numériques pour l'ACP (après la colonne 'Espece')
-                if not actual_numeric_traits_for_pca: # La liste est vide
+                if not actual_numeric_traits_for_pca: 
                     st.error("Aucun trait numérique disponible pour l'ACP après filtrage. L'analyse est impossible.")
                     st.session_state.run_main_analysis_once = False
                     st.session_state.analysis_has_run_for_current_selection = False
                     raise ValueError("Aucun trait numérique pour l'ACP.")
                 else:
-                    # L'analyse peut continuer avec sub_for_analysis_call_prepared
-                    labels, pca_results, coords_df, X_scaled_data = core.analyse(sub_for_analysis_call_prepared, n_clusters_selected_main)
+                    labels, pca_results, coords_df_from_core, X_scaled_data = core.analyse(sub_for_analysis_call_prepared, n_clusters_selected_main)
                     
-                    # Vérifier que coords_df a un index qui correspond à sub_for_analysis_call_prepared
-                    # et donc à st.session_state.sub (car ils partagent le même RangeIndex après reset_index)
+                    # **CORRECTION APPLIQUÉE ICI pour gérer le type de coords_df_from_core**
+                    if not isinstance(coords_df_from_core, pd.DataFrame):
+                        if isinstance(coords_df_from_core, np.ndarray) and coords_df_from_core.ndim == 2 and coords_df_from_core.shape[0] == len(sub_for_analysis_call_prepared):
+                            num_pcs = coords_df_from_core.shape[1]
+                            pc_cols = [f"PC{i+1}" for i in range(num_pcs)]
+                            coords_df = pd.DataFrame(coords_df_from_core, columns=pc_cols, index=sub_for_analysis_call_prepared.index)
+                            st.info("Les coordonnées PCA (coords_df) ont été converties de NumPy array en DataFrame.")
+                        else:
+                            st.error("Format des coordonnées PCA (coords_df) inattendu après retour de core.analyse. Doit être un DataFrame ou un NumPy array 2D compatible.")
+                            st.session_state.run_main_analysis_once = False
+                            st.session_state.analysis_has_run_for_current_selection = False
+                            raise TypeError("Format coords_df incorrect depuis core.analyse.")
+                    else: # C'est déjà un DataFrame
+                        coords_df = coords_df_from_core 
+                    
+                    # Maintenant, coords_df devrait être un DataFrame. Vérifier son index.
                     if not coords_df.index.equals(sub_for_analysis_call_prepared.index):
-                        st.error("L'index des coordonnées PCA ne correspond pas aux données d'entrée. L'alignement des données a échoué.")
-                        # Potentiellement recréer coords_df avec le bon index si c'est juste un problème d'objet index
-                        if len(coords_df) == len(sub_for_analysis_call_prepared):
-                             coords_df.index = sub_for_analysis_call_prepared.index
-                             st.warning("Index des coordonnées PCA réaligné.")
+                        st.error("L'index des coordonnées PCA (coords_df) ne correspond pas aux données d'entrée après conversion/vérification. L'alignement des données a échoué.")
+                        if len(coords_df) == len(sub_for_analysis_call_prepared): # Tenter de réindexer si les longueurs correspondent
+                            coords_df.index = sub_for_analysis_call_prepared.index
+                            st.warning("Index des coordonnées PCA (coords_df) forcé au réalignement.")
                         else:
                             st.session_state.run_main_analysis_once = False
                             st.session_state.analysis_has_run_for_current_selection = False
-                            raise ValueError("Incohérence d'index PCA.")
-
+                            print(f"coords_df length: {len(coords_df)}, sub_for_analysis_call_prepared length: {len(sub_for_analysis_call_prepared)}")
+                            print(f"coords_df index: {coords_df.index}")
+                            print(f"sub_for_analysis_call_prepared index: {sub_for_analysis_call_prepared.index}")
+                            raise ValueError("Incohérence de longueur d'index PCA persistante, impossible de réaligner.")
 
                     if st.session_state.run_main_analysis_once: 
-                        current_pdf = coords_df.copy() # Index de coords_df est crucial ici
+                        current_pdf = coords_df.copy() 
                         if not current_pdf.empty:
                             if len(labels) == len(current_pdf): current_pdf["Cluster"] = labels.astype(str)
                             else: current_pdf["Cluster"] = np.zeros(len(current_pdf)).astype(str) if len(current_pdf) > 0 else pd.Series(dtype=str)
                             
-                            # Fusionner les informations supplémentaires de st.session_state.sub en utilisant l'index partagé
-                            # st.session_state.sub et current_pdf (via coords_df et sub_for_analysis_call_prepared) doivent avoir le même index.
                             current_pdf["Source_Habitat"] = st.session_state.sub.loc[current_pdf.index, "Source_Habitat"]
                             current_pdf["Espece_Ref"] = st.session_state.sub.loc[current_pdf.index, "Espece_Ref_Original"]
                             current_pdf["Espece_User"] = st.session_state.sub.loc[current_pdf.index, "Espece_User_Input_Raw"]
@@ -545,7 +537,6 @@ if st.session_state.selected_habitats_indices and \
                                 loadings = eigenvectors_matrix * sqrt_eigenvalues_vector 
                                 communal = (loadings**2).sum(axis=1) 
                                 
-                                # Utiliser la liste des traits numériques réellement passés à l'ACP pour les communalités
                                 trait_columns_for_communal = actual_numeric_traits_for_pca 
                                 
                                 if len(communal) == len(trait_columns_for_communal):
@@ -564,11 +555,10 @@ if st.session_state.selected_habitats_indices and \
                                 st.warning("Résultats PCA incomplets pour communalités (components_ ou explained_variance_ manquants/incorrects).")
                             
                             st.session_state.X_for_dendro = X_scaled_data if isinstance(X_scaled_data, np.ndarray) else np.array([])
-                            # Les traits numériques pour le graphique interactif sont ceux utilisés dans l'ACP
                             st.session_state.numeric_trait_names_for_interactive_plot = actual_numeric_traits_for_pca
                             
                             default_x_init, default_y_init = None, None
-                            if not st.session_state.vip_data_df_for_calc.empty and actual_numeric_traits_for_pca: # Utiliser actual_numeric_traits_for_pca
+                            if not st.session_state.vip_data_df_for_calc.empty and actual_numeric_traits_for_pca: 
                                 top_vars_from_vip_numeric = [var for var in st.session_state.vip_data_df_for_calc["Variable"].tolist() if var in actual_numeric_traits_for_pca]
                                 if len(top_vars_from_vip_numeric) >= 1: default_x_init = top_vars_from_vip_numeric[0]
                                 if len(top_vars_from_vip_numeric) >= 2: default_y_init = top_vars_from_vip_numeric[1]
@@ -720,7 +710,6 @@ if st.session_state.run_main_analysis_once and not st.session_state.get('sub', p
         st.markdown("##### Graphique d'exploration")
         x_axis_plot = st.session_state.x_axis_trait_interactive
         y_axis_plot = st.session_state.y_axis_trait_interactive
-        # numeric_traits_plot is now st.session_state.numeric_trait_names_for_interactive_plot, which is actual_numeric_traits_for_pca
         numeric_traits_plot = st.session_state.get('numeric_trait_names_for_interactive_plot', [])
         sub_plot = st.session_state.get('sub', pd.DataFrame()) 
         pdf_plot = st.session_state.get('pdf', pd.DataFrame()) 
@@ -728,30 +717,24 @@ if st.session_state.run_main_analysis_once and not st.session_state.get('sub', p
         if not numeric_traits_plot: st.warning("Aucun trait numérique trouvé pour l'exploration interactive.")
         elif not x_axis_plot or not y_axis_plot: st.info("Veuillez sélectionner une variable pour l'Axe X et une pour l'Axe Y dans le tableau à gauche.")
         elif x_axis_plot not in numeric_traits_plot or y_axis_plot not in numeric_traits_plot: st.warning("Une ou les deux variables sélectionnées ne sont plus valides. Veuillez re-sélectionner.")
-        # sub_plot is the full data with all traits (numeric and categorical) and Source_Habitat
-        # pdf_plot has PCA coordinates and Source_Habitat
-        # For interactive plot, x_axis_plot and y_axis_plot refer to original trait names from sub_plot
         elif sub_plot.empty or pdf_plot.empty or x_axis_plot not in sub_plot.columns or y_axis_plot not in sub_plot.columns: 
             st.warning("Données pour le graphique interactif non prêtes, incohérentes ou variables sélectionnées non trouvées. Vérifiez l'analyse principale.")
-        elif not pdf_plot.index.equals(sub_plot.index): # Critical check for alignment
+        elif not pdf_plot.index.equals(sub_plot.index): 
              st.warning("Désalignement des données entre les résultats PCA (pdf_plot) et les données de traits (sub_plot). Le graphique interactif peut être incorrect.")
         else:
             required_pdf_cols_interactive = ['Espece_User', 'Ecologie', 'Cluster', 'Source_Habitat'] 
             if not all(col in pdf_plot.columns for col in required_pdf_cols_interactive): st.warning("Colonnes requises (Espece_User, Ecologie, Cluster, Source_Habitat) manquent dans les données PCA pour le graphique interactif.")
             else:
-                # Construct plot_data_interactive carefully, ensuring indices align
-                # pdf_plot and sub_plot should share the same RangeIndex at this point
                 plot_data_interactive = pd.DataFrame({
-                    'Espece_User': pdf_plot['Espece_User'], # From pdf_plot
-                    'Ecologie': pdf_plot['Ecologie'],       # From pdf_plot
-                    x_axis_plot: sub_plot[x_axis_plot],     # From sub_plot, using its index
-                    y_axis_plot: sub_plot[y_axis_plot],     # From sub_plot, using its index
-                    'Cluster': pdf_plot['Cluster'],         # From pdf_plot
-                    'Source_Habitat': pdf_plot['Source_Habitat'] # From pdf_plot
-                }).set_index(pdf_plot.index) # Ensure index is preserved if any implicit reset happened
+                    'Espece_User': pdf_plot['Espece_User'], 
+                    'Ecologie': pdf_plot['Ecologie'],       
+                    x_axis_plot: sub_plot[x_axis_plot],     
+                    y_axis_plot: sub_plot[y_axis_plot],     
+                    'Cluster': pdf_plot['Cluster'],         
+                    'Source_Habitat': pdf_plot['Source_Habitat'] 
+                }).set_index(pdf_plot.index) 
                 
                 plot_data_to_use = plot_data_interactive.copy()
-                # Jittering logic (remains the same)
                 temp_x_col_grp = "_temp_x"; temp_y_col_grp = "_temp_y"
                 plot_data_to_use[temp_x_col_grp] = plot_data_to_use[x_axis_plot]; plot_data_to_use[temp_y_col_grp] = plot_data_to_use[y_axis_plot]
                 duplicates_mask = plot_data_to_use.duplicated(subset=[temp_x_col_grp, temp_y_col_grp], keep=False)
