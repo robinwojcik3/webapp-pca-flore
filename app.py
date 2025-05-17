@@ -7,6 +7,7 @@ from scipy.spatial import ConvexHull
 import numpy as np
 import textwrap # Importé pour la mise en forme du texte de survol
 from collections import defaultdict # Ajouté pour l'analyse de co-occurrence
+import re # Ajouté pour parser les comptes dans les chaînes de caractères
 
 # Assurez-vous que le fichier core.py est dans le même répertoire ou accessible
 # Pour les besoins de cet exemple, si core.py n'est pas disponible,
@@ -1110,34 +1111,26 @@ elif st.session_state.run_main_analysis_once:
 # ---------------------------------------------------------------------------- #
 # ÉTAPE 5: ANALYSE DES CO-OCCURRENCES D'ESPÈCES (basée sur les syntaxons)
 # ---------------------------------------------------------------------------- #
-def style_cooccurrence_row(row, max_overall_count, vmin_count=1):
+def style_cooccurrence_row_parsing(row, max_overall_count, vmin_count=1):
     """
-    Applique un style de fond coloré aux cellules des voisins en fonction de leur compte de co-occurrence.
-    La fonction `row` est une Series pandas représentant une ligne du DataFrame auquel le style est appliqué.
-    Elle doit contenir les colonnes 'Voisin 1 Compte', 'Voisin 2 Compte', 'Voisin 3 Compte'.
-    La fonction retourne une Series de chaînes de style CSS, avec le même index que la `row` d'entrée.
+    Applique un style de fond coloré aux cellules des voisins.
+    Le compte de co-occurrence est PARSÉ depuis la chaîne de caractères de la cellule.
     """
-    # Initialise une Series pour les styles, avec le même index que la ligne d'entrée.
-    # Les styles non spécifiés resteront des chaînes vides (pas de style).
     styles = pd.Series('', index=row.index) 
-    
-    # Couleurs pour le dégradé: du gris foncé (proche du noir) au rouge foncé
-    color_start_rgb = (40, 40, 40)  # Gris très foncé
-    color_end_rgb = (200, 50, 50)    # Rouge foncé modéré
+    color_start_rgb = (40, 40, 40) 
+    color_end_rgb = (200, 50, 50)   
 
-    for col_num in [1, 2, 3]: # Correspond à Voisin 1, Voisin 2, Voisin 3
-        # Colonne à laquelle le style sera appliqué (ex: 'Voisin 1', 'Voisin 2', etc.)
-        target_style_col_name = f'Voisin {col_num}' 
-        # Colonne d'où lire la valeur du compte (ex: 'Voisin 1 Compte')
-        count_val_col_name = f'Voisin {col_num} Compte'
-        
-        # Vérifier si la colonne de compte existe dans la ligne (elle devrait si subset=None)
-        if count_val_col_name in row.index:
-            count_val = row[count_val_col_name] 
+    for col_name in ['Voisin 1', 'Voisin 2', 'Voisin 3']: # Colonnes cibles pour le style
+        if col_name in row.index:
+            cell_value = str(row[col_name]) # Valeur de la cellule (ex: "Nom Espèce - 7" ou "-")
+            current_count = 0 # Default count
 
-            if pd.notna(count_val) and count_val > 0:
-                current_count = int(count_val)
-                # Calculer le ratio pour l'interpolation des couleurs
+            # Essayer d'extraire le compte de la chaîne "Nom - Compte"
+            match = re.search(r' - (\d+)$', cell_value)
+            if match:
+                current_count = int(match.group(1))
+            
+            if current_count > 0:
                 if max_overall_count == vmin_count: 
                     ratio = 1.0 if current_count >= vmin_count else 0.0
                 elif max_overall_count > vmin_count:
@@ -1146,18 +1139,12 @@ def style_cooccurrence_row(row, max_overall_count, vmin_count=1):
                 else: 
                     ratio = 0.0
                 
-                # Interpoler les couleurs RGB
                 r = int(color_start_rgb[0] + ratio * (color_end_rgb[0] - color_start_rgb[0]))
                 g = int(color_start_rgb[1] + ratio * (color_end_rgb[1] - color_start_rgb[1]))
                 b = int(color_start_rgb[2] + ratio * (color_end_rgb[2] - color_start_rgb[2]))
-                
-                # Appliquer le style à la colonne cible (ex: 'Voisin 1')
-                styles[target_style_col_name] = f'background-color: rgb({r},{g},{b})'
+                styles[col_name] = f'background-color: rgb({r},{g},{b})'
             else:
-                # Pas de style particulier si pas de co-occurrence ou compte nul pour la colonne cible
-                styles[target_style_col_name] = 'background-color: none' 
-        # else: si la colonne de compte n'est pas dans la ligne, ne rien faire pour cette colonne de style.
-        # Cela ne devrait pas arriver si la fonction reçoit la ligne complète.
+                styles[col_name] = 'background-color: none' 
     return styles
 
 if st.session_state.run_main_analysis_once and \
@@ -1168,8 +1155,9 @@ if st.session_state.run_main_analysis_once and \
     st.subheader("Étape 5: Analyse des Co-occurrences d'Espèces (basée sur les listes de syntaxons)")
 
     principal_species_original_names_from_sub = st.session_state.sub['Espece_Ref_Original'].unique()
-    cooccurrence_results_list = [] 
-
+    
+    # Collecter d'abord les noms et les comptes bruts
+    raw_cooccurrence_data_for_max_calc = []
     for principal_species_original in principal_species_original_names_from_sub:
         principal_species_normalized = normalize_species_name_for_villaret(principal_species_original)
         if not principal_species_normalized:
@@ -1182,81 +1170,63 @@ if st.session_state.run_main_analysis_once and \
                     if other_species_in_syntaxon_normalized != principal_species_normalized:
                         co_occurrence_counts_for_this_principal[other_species_in_syntaxon_normalized] += 1
         
-        current_result_row_dict = {'Espèce Principale (issue des relevés)': principal_species_original}
+        # Stocker les comptes pour le calcul du max_overall_cooccurrence
         if co_occurrence_counts_for_this_principal:
             sorted_co_occurrences = sorted(co_occurrence_counts_for_this_principal.items(), key=lambda item: item[1], reverse=True)
-            
+            for i in range(3):
+                if i < len(sorted_co_occurrences):
+                    _, count = sorted_co_occurrences[i]
+                    raw_cooccurrence_data_for_max_calc.append({'count': count}) # Stocker uniquement le compte
+    
+    # Calculer max_overall_cooccurrence à partir des comptes collectés
+    all_counts_for_styling = [item['count'] for item in raw_cooccurrence_data_for_max_calc if item['count'] > 0]
+    max_overall_cooccurrence = max(all_counts_for_styling) if all_counts_for_styling else 0
+    min_cooccurrence_for_color = 1 
+
+    # Maintenant, préparer la liste pour l'affichage final
+    cooccurrence_display_list = []
+    for principal_species_original in principal_species_original_names_from_sub:
+        principal_species_normalized = normalize_species_name_for_villaret(principal_species_original)
+        if not principal_species_normalized: continue # Redondant si déjà filtré mais sûr
+
+        co_occurrence_counts_for_this_principal = defaultdict(int) # Recalculer ou stocker si performance critique
+        for syntaxon_record in syntaxon_data_list:
+            if principal_species_normalized in syntaxon_record['species_set']:
+                for other_species_in_syntaxon_normalized in syntaxon_record['species_set']:
+                    if other_species_in_syntaxon_normalized != principal_species_normalized:
+                        co_occurrence_counts_for_this_principal[other_species_in_syntaxon_normalized] += 1
+        
+        display_row_dict = {'Espèce Principale (issue des relevés)': principal_species_original}
+        if co_occurrence_counts_for_this_principal:
+            sorted_co_occurrences = sorted(co_occurrence_counts_for_this_principal.items(), key=lambda item: item[1], reverse=True)
             for i in range(3): 
                 neighbor_num = i + 1 
+                display_col_name = f'Voisin {neighbor_num}'
                 if i < len(sorted_co_occurrences):
                     name, count = sorted_co_occurrences[i]
-                    current_result_row_dict[f'Voisin {neighbor_num} Nom'] = name
-                    current_result_row_dict[f'Voisin {neighbor_num} Compte'] = count
+                    display_row_dict[display_col_name] = f"{str(name).capitalize()} - {count}"
                 else: 
-                    current_result_row_dict[f'Voisin {neighbor_num} Nom'] = None
-                    current_result_row_dict[f'Voisin {neighbor_num} Compte'] = pd.NA 
+                    display_row_dict[display_col_name] = "-"
         else: 
             for neighbor_num in [1, 2, 3]:
-                current_result_row_dict[f'Voisin {neighbor_num} Nom'] = None
-                current_result_row_dict[f'Voisin {neighbor_num} Compte'] = pd.NA
-        cooccurrence_results_list.append(current_result_row_dict)
+                display_row_dict[f'Voisin {neighbor_num}'] = "-"
+        cooccurrence_display_list.append(display_row_dict)
 
-    if cooccurrence_results_list:
-        raw_cooccurrence_df = pd.DataFrame(cooccurrence_results_list)
-
-        all_counts_for_styling = []
-        for neighbor_num in [1, 2, 3]:
-            counts_in_col = raw_cooccurrence_df[f'Voisin {neighbor_num} Compte'].dropna().astype(int)
-            all_counts_for_styling.extend(counts_in_col[counts_in_col > 0].tolist())
+    if cooccurrence_display_list:
+        # Ce DataFrame n'a que les colonnes d'affichage finales
+        cooccurrence_df_for_display = pd.DataFrame(cooccurrence_display_list)
         
-        max_overall_cooccurrence = max(all_counts_for_styling) if all_counts_for_styling else 0
-        min_cooccurrence_for_color = 1 
-
-        # Création du DataFrame qui sera passé au Styler.
-        # Ce DataFrame doit contenir toutes les colonnes nécessaires à la fonction de style pour la lecture,
-        # et les colonnes cibles pour l'application du style.
-        df_for_styling_input_and_display = []
-        for _, row_from_raw_df in raw_cooccurrence_df.iterrows():
-            # Dictionnaire pour la nouvelle ligne du DataFrame à styler
-            styled_row_dict = {'Espèce Principale (issue des relevés)': row_from_raw_df['Espèce Principale (issue des relevés)']}
-            for neighbor_num_loop in [1, 2, 3]: 
-                nom_col_in_raw = f'Voisin {neighbor_num_loop} Nom'
-                compte_col_in_raw = f'Voisin {neighbor_num_loop} Compte'
-                
-                nom_val = row_from_raw_df[nom_col_in_raw]
-                compte_val = row_from_raw_df[compte_col_in_raw]
-                
-                # Colonne pour affichage combiné (ex: 'Voisin 1')
-                display_col_combined = f'Voisin {neighbor_num_loop}'
-                # Colonne pour le compte brut, utilisée par la fonction de style (ex: 'Voisin 1 Compte')
-                data_col_compte = f'Voisin {neighbor_num_loop} Compte'
-
-                if pd.notna(nom_val) and pd.notna(compte_val) and compte_val > 0:
-                    styled_row_dict[display_col_combined] = f"{str(nom_val).capitalize()} - {compte_val}"
-                else:
-                    styled_row_dict[display_col_combined] = "-" 
-                
-                # Ajouter la colonne de compte brut. La fonction de style lira cette colonne.
-                styled_row_dict[data_col_compte] = compte_val if pd.notna(compte_val) else 0 
-            df_for_styling_input_and_display.append(styled_row_dict)
-        
-        # Ce DataFrame contient maintenant les colonnes d'affichage ET les colonnes de compte brut
-        cooccurrence_df_for_styler = pd.DataFrame(df_for_styling_input_and_display)
-
         st.markdown("Ce tableau présente, pour chaque espèce de vos relevés (colonne 1), les trois espèces qui lui sont le plus fréquemment associées au sein des listes d'espèces caractéristiques des syntaxons de référence (`data_villaret.csv`). Le nombre après le tiret indique le nombre de syntaxons partagés. La couleur de fond indique l'intensité de cette co-occurrence (du gris foncé au rouge).")
         
-        styled_object = cooccurrence_df_for_styler.style.apply(
-            style_cooccurrence_row, # La fonction de style
+        styled_object = cooccurrence_df_for_display.style.apply(
+            style_cooccurrence_row_parsing, 
             max_overall_count=max_overall_cooccurrence,
             vmin_count=min_cooccurrence_for_color,
-            axis=1, # Appliquer par ligne
-            subset=None # La fonction de style reçoit la ligne entière de cooccurrence_df_for_styler
+            axis=1, 
+            subset=None # La fonction de style reçoit la ligne entière de cooccurrence_df_for_display
         ).format(na_rep="-")
-
-        # Colonnes à masquer après le style (les colonnes de compte brut)
-        columns_to_hide = [f'Voisin {i} Compte' for i in [1,2,3]]
         
-        st.dataframe(styled_object.hide(axis="columns", subset=columns_to_hide), use_container_width=True)
+        st.dataframe(styled_object, use_container_width=True)
 
     else:
         st.info("Aucune donnée de co-occurrence à afficher pour les espèces sélectionnées et les syntaxons disponibles.")
