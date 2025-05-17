@@ -949,6 +949,3 @@ if st.session_state.run_main_analysis_once and not st.session_state.get('sub', p
 elif st.session_state.run_main_analysis_once: 
     st.markdown("---"); st.subheader("Étape 4: Composition des Clusters (ACP)")
     st.info("Analyse lancée, mais aucune donnée d'espèce n'a pu être traitée pour la composition des clusters.")
-
-
-�
