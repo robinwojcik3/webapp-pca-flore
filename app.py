@@ -3,10 +3,11 @@ import pandas as pd
 import plotly.express as px
 import plotly.figure_factory as ff
 import plotly.graph_objects as go
-from scipy.cluster.hierarchy import linkage # Gardé au cas où core.py l'utilise encore, mais app.py ne l'utilisera plus
+from scipy.cluster.hierarchy import linkage # Gardé au cas où core.py l'utilise encore
 from scipy.spatial import ConvexHull
 import numpy as np
 import textwrap # Importé pour la mise en forme du texte de survol
+from collections import Counter # Ajouté pour compter les co-occurrences
 
 # Assurez-vous que le fichier core.py est dans le même répertoire ou accessible
 # Pour les besoins de cet exemple, si core.py n'est pas disponible,
@@ -39,7 +40,6 @@ except ImportError:
         
         if n_samples == 0 or sub_df_prepared_for_core.shape[1] <= 1:
             mock_pca_obj = MockPCA(n_features_actual=0, n_components_to_simulate=0)
-            # X_scaled_data n'est plus utilisé par app.py, mais on le retourne pour la compatibilité de la signature
             return np.array([]), mock_pca_obj, pd.DataFrame(index=sub_df_prepared_for_core.index), np.array([]).reshape(0,1)
 
         numeric_cols_for_pca_df = sub_df_prepared_for_core.iloc[:, 1:]
@@ -61,8 +61,6 @@ except ImportError:
             else:
                 labels = np.random.randint(0, n_clusters, n_samples)
         
-        # X_scaled (pour dendrogramme) n'est plus utilisé par app.py
-        # On le simule quand même pour la compatibilité de la signature de la fonction mock_analyse
         X_scaled_sim = np.array([]).reshape(n_samples, 0)
         if not numeric_cols_for_pca_df.empty:
             X_scaled_temp_sim = (numeric_cols_for_pca_df - numeric_cols_for_pca_df.mean()) / numeric_cols_for_pca_df.std()
@@ -82,7 +80,7 @@ except ImportError:
             new_pc_cols = [f"PC{i+1}" for i in range(mock_pca_obj.components_.shape[0])]
             coords_df.columns = new_pc_cols
         
-        return labels, mock_pca_obj, coords_df, X_scaled_sim # X_scaled_sim est retourné mais non utilisé
+        return labels, mock_pca_obj, coords_df, X_scaled_sim 
 
     core = type('CoreModule', (object,), {'analyse': mock_analyse, 'read_reference': lambda fp: pd.DataFrame()})
 
@@ -110,15 +108,15 @@ div[data-testid="stDataEditor"] td {
 
 /* Style pour la première ligne du st.data_editor (noms des habitats) - CONSERVÉ POUR L'ASPECT VISUEL */
 div[data-testid="stDataEditor"] .glideDataEditor-body .dvn-scroll-inner > div:first-child > div[data-cell^="[0,"] > div {
-    background-color: #22272f !important; /* Couleur de fond pour thème sombre */
-    color: #e1e1e1 !important;          /* Couleur de texte pour thème sombre */
+    background-color: #22272f !important; 
+    color: #e1e1e1 !important;          
     font-weight: bold !important;
 }
 /* Style pour la cellule de la première ligne en mode édition */
 div[data-testid="stDataEditor"] .glideDataEditor-body .dvn-scroll-inner > div:first-child > div[data-cell^="[0,"] > div > .gdg-input {
-    background-color: #ffffff !important; /* Fond blanc pour l'éditeur */
-    color: #000000 !important;          /* Texte noir pour l'éditeur */
-    font-weight: normal !important;      /* Poids normal pour l'éditeur */
+    background-color: #ffffff !important; 
+    color: #000000 !important;          
+    font-weight: normal !important;      
 }
 
 .habitat-select-button button {
@@ -141,6 +139,7 @@ LABEL_FONT_SIZE_ON_PLOTS = 15
 HOVER_SPECIES_FONT_SIZE = 15  
 HOVER_ECOLOGY_TITLE_FONT_SIZE = 14 
 HOVER_ECOLOGY_TEXT_FONT_SIZE = 13  
+SYNTAXON_DATA_FILE = "data_villaret.csv" # Nom du fichier pour les données de syntaxons
 
 @st.cache_data
 def load_data(file_path="data_ref.csv"):
@@ -250,10 +249,62 @@ def load_ecology_data(file_path="data_ecologie_espece.csv"):
         return pd.DataFrame(columns=['Description_Ecologie']).set_index(pd.Index([], name='Espece_norm'))
     except Exception as e:
         print(f"AVERTISSEMENT: Impossible de charger les données écologiques depuis '{file_path}': {e}.")
-        st.toast(f"Erreur chargement fichier écologique.", icon="�")
+        st.toast(f"Erreur chargement fichier écologique.", icon="🔥") # Correction de l'icône
         return pd.DataFrame(columns=['Description_Ecologie']).set_index(pd.Index([], name='Espece_norm'))
 
 ecology_df = load_ecology_data()
+
+# ---------------------------------------------------------------------------- #
+# NOUVEAU: CHARGEMENT DES DONNÉES DE SYNTAXONS POUR CO-OCCURRENCES
+# ---------------------------------------------------------------------------- #
+@st.cache_data
+def load_syntaxon_data(file_path):
+    """
+    Charge et traite les données des syntaxons à partir d'un fichier CSV.
+    Le fichier attendu a :
+    - Colonne 0: ID du syntaxon (non utilisé directement pour l'analyse des espèces)
+    - Colonne 1: Nom du syntaxon (non utilisé directement pour l'analyse des espèces)
+    - Colonnes 2+ : Noms des espèces caractéristiques du syntaxon.
+    Retourne une liste de sets, où chaque set contient les noms normalisés (binomial, lowercase)
+    des espèces pour un syntaxon.
+    """
+    try:
+        # Lire toutes les colonnes comme des chaînes pour éviter les problèmes de type et gérer les NaN
+        df_syntaxons = pd.read_csv(file_path, sep=';', header=None, dtype=str)
+        
+        if df_syntaxons.empty:
+            st.warning(f"Le fichier de données des syntaxons '{file_path}' est vide.")
+            return []
+
+        list_of_syntaxon_species_sets = []
+        # Itérer sur chaque ligne (chaque syntaxon)
+        for index, row in df_syntaxons.iterrows():
+            # Prendre les espèces à partir de la 3ème colonne (index 2)
+            # et ignorer les valeurs NaN qui sont lues comme 'nan' chaîne après dtype=str
+            species_in_row = [
+                " ".join(str(s).strip().split()[:2]).lower() 
+                for s in row.iloc[2:].tolist() 
+                if pd.notna(s) and str(s).strip() and str(s).lower() != 'nan'
+            ]
+            if species_in_row: # Ajouter seulement s'il y a des espèces valides
+                list_of_syntaxon_species_sets.append(set(species_in_row))
+        
+        if not list_of_syntaxon_species_sets:
+            st.warning(f"Aucune donnée d'espèce valide trouvée dans '{file_path}' après traitement.")
+        
+        return list_of_syntaxon_species_sets
+    except FileNotFoundError:
+        st.error(f"ERREUR: Fichier de données des syntaxons '{file_path}' non trouvé.")
+        return []
+    except pd.errors.EmptyDataError:
+        st.warning(f"Le fichier de données des syntaxons '{file_path}' est vide.")
+        return []
+    except Exception as e:
+        st.error(f"Erreur lors du chargement ou du traitement du fichier des syntaxons '{file_path}': {e}")
+        return []
+
+syntaxon_species_list_of_sets = load_syntaxon_data(SYNTAXON_DATA_FILE)
+
 
 # ---------------------------------------------------------------------------- #
 # INITIALISATION DES ETATS DE SESSION
@@ -266,7 +317,6 @@ default_session_states = {
     'vip_data_df_interactive_snapshot_for_comparison': pd.DataFrame(), 
     'sub': pd.DataFrame(), 
     'pdf': pd.DataFrame(), 
-    # 'X_for_dendro': np.array([]), # SUPPRIMÉ: Dendrogramme retiré
     'numeric_trait_names_for_interactive_plot': [],
     'selected_habitats_indices': [], 
     'previous_num_cols': 0,
@@ -334,10 +384,8 @@ if not current_releves_df_for_selection.empty and \
         idx for idx in st.session_state.selected_habitats_indices if idx < num_actual_cols
     ]
 
-    # MODIFIÉ: Filtrer les colonnes pour ne montrer que celles avec des données d'espèces
     valid_habitat_buttons_info = []
     for i in range(num_actual_cols):
-        # Vérifier si la colonne (à partir de la deuxième ligne) contient des données d'espèces valides
         species_in_col = current_releves_df_for_selection.iloc[1:, i].dropna().astype(str).str.strip().replace('', np.nan).dropna()
         if not species_in_col.empty:
             habitat_name_for_button = habitat_names_from_df[i] if pd.notna(habitat_names_from_df[i]) and str(habitat_names_from_df[i]).strip() != "" else f"Relevé {i+1}"
@@ -353,9 +401,9 @@ if not current_releves_df_for_selection.empty and \
             is_selected = (col_idx in st.session_state.selected_habitats_indices) 
             
             button_type = "primary" if is_selected else "secondary"
-            button_key = f"habitat_select_button_{col_idx}" # Utiliser l'index original pour la clé
+            button_key = f"habitat_select_button_{col_idx}" 
 
-            with button_cols_layout[k]: # Utiliser l'index de la boucle sur les boutons valides
+            with button_cols_layout[k]: 
                 st.markdown(f'<div class="habitat-select-button">', unsafe_allow_html=True)
                 if st.button(habitat_name_display, key=button_key, type=button_type, use_container_width=True):
                     if is_selected:
@@ -366,16 +414,15 @@ if not current_releves_df_for_selection.empty and \
                     st.session_state.analysis_has_run_for_current_selection = False 
                     st.rerun()
                 st.markdown('</div>', unsafe_allow_html=True)
-    elif num_actual_cols > 0 : # Il y a des colonnes, mais aucune avec des données d'espèces
+    elif num_actual_cols > 0 : 
         st.info("Aucune colonne ne contient de données d'espèces pour la sélection. Veuillez ajouter des espèces sous les noms d'habitats.")
-    else: # Aucune colonne du tout
+    else: 
         st.info("Ajoutez des colonnes au tableau pour pouvoir sélectionner des relevés.")
 else:
     st.warning("Le tableau de données est vide ou ne contient pas de colonnes pour la sélection.")
 
 
-# fig_pca = None # Déjà initialisé globalement
-# fig_dend = None # SUPPRIMÉ: Dendrogramme retiré
+fig_pca = None 
 
 if st.session_state.selected_habitats_indices and \
     not ref.empty and \
@@ -386,7 +433,6 @@ if st.session_state.selected_habitats_indices and \
 
     st.session_state.sub = pd.DataFrame()
     st.session_state.pdf = pd.DataFrame()
-    # st.session_state.X_for_dendro = np.array([]) # SUPPRIMÉ
     st.session_state.vip_data_df_interactive = pd.DataFrame()
     st.session_state.numeric_trait_names_for_interactive_plot = []
 
@@ -484,7 +530,6 @@ if st.session_state.selected_habitats_indices and \
                     st.session_state.analysis_has_run_for_current_selection = False
                     raise ValueError("Aucun trait numérique pour l'ACP.")
                 else:
-                    # X_scaled_data n'est plus assigné à st.session_state.X_for_dendro
                     labels, pca_results, coords_df_from_core, _ = core.analyse(sub_for_analysis_call_prepared, n_clusters_selected_main)
                     
                     if not isinstance(coords_df_from_core, pd.DataFrame):
@@ -564,7 +609,6 @@ if st.session_state.selected_habitats_indices and \
                                 st.session_state.vip_data_df_for_calc = pd.DataFrame(columns=["Variable", "Communalité (%)"])
                                 st.warning("Résultats PCA incomplets pour communalités (components_ ou explained_variance_ manquants/incorrects).")
                             
-                            # st.session_state.X_for_dendro = X_scaled_data if isinstance(X_scaled_data, np.ndarray) else np.array([]) # SUPPRIMÉ
                             st.session_state.numeric_trait_names_for_interactive_plot = actual_numeric_traits_for_pca
                             
                             default_x_init, default_y_init = None, None
@@ -896,19 +940,16 @@ if st.session_state.run_main_analysis_once:
                 dragmode='pan'
             )
         else: 
-            fig_pca = None # Réinitialiser fig_pca si les conditions ne sont pas remplies
+            fig_pca = None 
             if not pdf_display_pca.empty : 
                 with col_pca_plot_area: st.warning("Moins de deux composantes principales disponibles pour le graphique PCA. Le graphique ne peut être affiché.")
-    # SUPPRIMÉ: Section de création de fig_dend
-    # else: fig_dend = None # Déjà géré globalement ou non nécessaire
-
 
 with col_pca_plot_area: 
     if fig_pca: st.plotly_chart(fig_pca, use_container_width=True, config={'scrollZoom': True}) 
     elif st.session_state.run_main_analysis_once and st.session_state.get('sub', pd.DataFrame()).empty:
         st.warning("L'analyse n'a pas produit de résultats affichables pour le PCA (pas d'espèces traitées ou PCA impossible).")
     elif st.session_state.run_main_analysis_once and fig_pca is None and not st.session_state.get('pdf', pd.DataFrame()).empty : 
-        pass # Le message d'avertissement pour PCA est déjà géré ci-dessus si y_pca_col est None
+        pass 
     elif st.session_state.run_main_analysis_once :
         st.warning("Le graphique PCA n'a pas pu être généré. Vérifiez les données d'entrée et les paramètres.")
 
@@ -949,3 +990,100 @@ if st.session_state.run_main_analysis_once and not st.session_state.get('sub', p
 elif st.session_state.run_main_analysis_once: 
     st.markdown("---"); st.subheader("Étape 4: Composition des Clusters (ACP)")
     st.info("Analyse lancée, mais aucune donnée d'espèce n'a pu être traitée pour la composition des clusters.")
+
+# ---------------------------------------------------------------------------- #
+# NOUVEAU: ÉTAPE 5: ANALYSE DES CO-OCCURRENCES D'ESPÈCES
+# ---------------------------------------------------------------------------- #
+if st.session_state.run_main_analysis_once and not st.session_state.get('sub', pd.DataFrame()).empty and syntaxon_species_list_of_sets:
+    st.markdown("---")
+    st.subheader("Étape 5: Analyse des Co-occurrences d'Espèces (basée sur data_villaret.csv)")
+
+    # Utiliser 'Espece_Ref_Original' de st.session_state.sub car ce sont les noms de la base de traits
+    # et normaliser ces noms pour la comparaison.
+    target_species_for_cooccurrence_raw = st.session_state.sub['Espece_Ref_Original'].unique()
+    
+    target_species_for_cooccurrence_normalized = [
+        " ".join(str(s).strip().split()[:2]).lower() 
+        for s in target_species_for_cooccurrence_raw 
+        if pd.notna(s) and str(s).strip()
+    ]
+    target_species_for_cooccurrence_normalized = sorted(list(set(target_species_for_cooccurrence_normalized)))
+
+    if not target_species_for_cooccurrence_normalized:
+        st.info("Aucune espèce de l'analyse principale à utiliser pour l'analyse des co-occurrences.")
+    else:
+        cooccurrence_results = []
+        for target_species_norm in target_species_for_cooccurrence_normalized:
+            neighbor_counts = Counter()
+            # Retrouver le nom original (avec majuscules) pour l'affichage, en prenant le premier correspondant
+            # Ceci est pour l'affichage, la logique de co-occurrence utilise les noms normalisés.
+            display_target_species_name = next((raw_name for raw_name in target_species_for_cooccurrence_raw 
+                                                if " ".join(str(raw_name).strip().split()[:2]).lower() == target_species_norm), 
+                                               target_species_norm)
+
+
+            for syntaxon_set in syntaxon_species_list_of_sets:
+                if target_species_norm in syntaxon_set:
+                    for neighbor_species_norm in syntaxon_set:
+                        if neighbor_species_norm != target_species_norm:
+                            neighbor_counts[neighbor_species_norm] += 1
+            
+            top_3_neighbors = neighbor_counts.most_common(3)
+            
+            result_row = {"Espèce Principale": display_target_species_name.capitalize()} # Capitalize for display
+            for i, (neighbor, count) in enumerate(top_3_neighbors):
+                # Essayer de retrouver le nom original du voisin pour l'affichage
+                # Cela suppose que les espèces de data_villaret sont aussi potentiellement dans data_ref
+                # Si non, on affiche le nom normalisé.
+                display_neighbor_name = neighbor # Fallback
+                if not ref.empty and 'Espece' in ref.columns:
+                    ref_match = ref_binom_series[ref_binom_series == neighbor].first_valid_index()
+                    if ref_match is not None:
+                        display_neighbor_name = ref.loc[ref_match, 'Espece']
+                
+                result_row[f"Voisin {i+1} (fréq: {count})"] = display_neighbor_name.capitalize() # Capitalize for display
+            
+            # S'assurer que les colonnes Voisin 1, 2, 3 existent même si moins de 3 voisins
+            for i in range(1, 4):
+                col_name_check = f"Voisin {i} (fréq: {top_3_neighbors[i-1][1] if i-1 < len(top_3_neighbors) else 0})" 
+                # Le nom de la colonne dépendra de la fréquence, donc on utilise un placeholder si non trouvé
+                # Pour simplifier, on va nommer les colonnes Voisin 1, Voisin 2, Voisin 3
+                # et mettre la fréquence dans la valeur ou en infobulle si possible.
+                # Pour le tableau simple, on met le nom et la fréquence.
+                
+                # Réajustement pour des noms de colonnes fixes :
+                col_name_fixed = f"Voisin {i}"
+                if i-1 < len(top_3_neighbors):
+                    neighbor_norm, count = top_3_neighbors[i-1]
+                    # Retrouver le nom original pour affichage
+                    display_neighbor_name_fixed = neighbor_norm # Fallback
+                    if not ref.empty and 'Espece' in ref.columns:
+                        ref_match_fixed = ref_binom_series[ref_binom_series == neighbor_norm].first_valid_index()
+                        if ref_match_fixed is not None:
+                            display_neighbor_name_fixed = ref.loc[ref_match_fixed, 'Espece']
+                    result_row[col_name_fixed] = f"{display_neighbor_name_fixed.capitalize()} ({count})"
+                else:
+                    result_row[col_name_fixed] = "N/A"
+
+
+            cooccurrence_results.append(result_row)
+
+        if cooccurrence_results:
+            cooccurrence_df = pd.DataFrame(cooccurrence_results)
+            # Réorganiser les colonnes pour s'assurer de l'ordre
+            cols_ordered = ["Espèce Principale", "Voisin 1", "Voisin 2", "Voisin 3"]
+            # Filtrer pour ne garder que les colonnes présentes dans le DataFrame (au cas où il y aurait moins de 3 voisins pour toutes les espèces)
+            cols_to_display = [col for col in cols_ordered if col in cooccurrence_df.columns]
+            
+            st.dataframe(cooccurrence_df[cols_to_display], use_container_width=True)
+        else:
+            st.info("Aucun résultat de co-occurrence à afficher pour les espèces sélectionnées.")
+elif st.session_state.run_main_analysis_once and not syntaxon_species_list_of_sets:
+    st.markdown("---")
+    st.subheader("Étape 5: Analyse des Co-occurrences d'Espèces")
+    st.warning(f"Les données de syntaxons ({SYNTAXON_DATA_FILE}) n'ont pas pu être chargées ou sont vides. L'analyse des co-occurrences est désactivée.")
+elif st.session_state.run_main_analysis_once:
+    st.markdown("---")
+    st.subheader("Étape 5: Analyse des Co-occurrences d'Espèces")
+    st.info("L'analyse principale n'a pas abouti à des données suffisantes (aucune espèce trouvée ou traitée) pour l'analyse des co-occurrences.")
+
