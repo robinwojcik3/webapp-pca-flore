@@ -3,7 +3,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.figure_factory as ff
 import plotly.graph_objects as go
-from scipy.cluster.hierarchy import linkage
+from scipy.cluster.hierarchy import linkage # Gardé au cas où core.py l'utilise encore, mais app.py ne l'utilisera plus
 from scipy.spatial import ConvexHull
 import numpy as np
 import textwrap # Importé pour la mise en forme du texte de survol
@@ -14,7 +14,7 @@ import textwrap # Importé pour la mise en forme du texte de survol
 try:
     import core
 except ImportError:
-    st.warning("Le module 'core.py' est introuvable. Une fonction d'analyse simulée sera utilisée. L'ACP et le dendrogramme réels ne fonctionneront pas.")
+    st.warning("Le module 'core.py' est introuvable. Une fonction d'analyse simulée sera utilisée. L'ACP réelle ne fonctionnera pas.")
     # Simulation de la fonction core.analyse pour permettre à l'UI de fonctionner
     class MockPCA:
         def __init__(self, n_features_actual, n_components_to_simulate):
@@ -34,27 +34,24 @@ except ImportError:
                 self.components_ = np.array([])
                 self.explained_variance_ = np.array([])
 
-    def mock_analyse(sub_df_prepared_for_core, n_clusters): # Renamed to reflect its structure
-        # sub_df_prepared_for_core is expected to have 'Espece' as first col, rest numeric for PCA
+    def mock_analyse(sub_df_prepared_for_core, n_clusters):
         n_samples = len(sub_df_prepared_for_core)
         
-        # Numeric columns for PCA are all columns after 'Espece'
-        if n_samples == 0 or sub_df_prepared_for_core.shape[1] <= 1: # No data or only 'Espece' column
+        if n_samples == 0 or sub_df_prepared_for_core.shape[1] <= 1:
             mock_pca_obj = MockPCA(n_features_actual=0, n_components_to_simulate=0)
-            # Return empty but conforming structures
+            # X_scaled_data n'est plus utilisé par app.py, mais on le retourne pour la compatibilité de la signature
             return np.array([]), mock_pca_obj, pd.DataFrame(index=sub_df_prepared_for_core.index), np.array([]).reshape(0,1)
 
         numeric_cols_for_pca_df = sub_df_prepared_for_core.iloc[:, 1:]
         n_features = numeric_cols_for_pca_df.shape[1]
 
-        if n_features == 0: # Only 'Espece' column was present, but no numeric traits after it
+        if n_features == 0:
             mock_pca_obj = MockPCA(n_features_actual=0, n_components_to_simulate=0)
             return np.array([]), mock_pca_obj, pd.DataFrame(index=sub_df_prepared_for_core.index), np.array([]).reshape(0,1)
 
         n_pcs_to_simulate_coords = min(2, n_features)
         coords_array = np.random.rand(n_samples, n_pcs_to_simulate_coords) * 10
         pc_cols = [f"PC{i+1}" for i in range(coords_array.shape[1])]
-        # Index of coords_df should match the input sub_df_prepared_for_core for proper alignment later
         coords_df = pd.DataFrame(coords_array, columns=pc_cols, index=sub_df_prepared_for_core.index)
 
         labels = np.array([])
@@ -64,12 +61,19 @@ except ImportError:
             else:
                 labels = np.random.randint(0, n_clusters, n_samples)
         
-        X_scaled = np.array([]).reshape(n_samples, 0)
+        # X_scaled (pour dendrogramme) n'est plus utilisé par app.py
+        # On le simule quand même pour la compatibilité de la signature de la fonction mock_analyse
+        X_scaled_sim = np.array([]).reshape(n_samples, 0)
         if not numeric_cols_for_pca_df.empty:
-            X_scaled_temp = (numeric_cols_for_pca_df - numeric_cols_for_pca_df.mean()) / numeric_cols_for_pca_df.std()
-            X_scaled = X_scaled_temp.fillna(0).values
+            X_scaled_temp_sim = (numeric_cols_for_pca_df - numeric_cols_for_pca_df.mean()) / numeric_cols_for_pca_df.std()
+            X_scaled_sim = X_scaled_temp_sim.fillna(0).values
         elif n_samples > 0 :
-             X_scaled = np.random.rand(n_samples, 1) 
+             X_scaled_sim = np.random.rand(n_samples, 1) 
+        if X_scaled_sim.ndim == 1 and n_samples > 0 :
+            X_scaled_sim = X_scaled_sim.reshape(-1,1)
+        elif X_scaled_sim.size == 0 and n_samples == 0:
+             X_scaled_sim = np.array([]).reshape(0,n_features if n_features > 0 else 1)
+
 
         mock_pca_obj = MockPCA(n_features_actual=n_features, n_components_to_simulate=n_pcs_to_simulate_coords)
         
@@ -78,13 +82,7 @@ except ImportError:
             new_pc_cols = [f"PC{i+1}" for i in range(mock_pca_obj.components_.shape[0])]
             coords_df.columns = new_pc_cols
         
-        if X_scaled.ndim == 1 and n_samples > 0 :
-            X_scaled = X_scaled.reshape(-1,1)
-        elif X_scaled.size == 0 and n_samples == 0: # Corrected condition for empty X_scaled
-             X_scaled = np.array([]).reshape(0,n_features if n_features > 0 else 1)
-
-
-        return labels, mock_pca_obj, coords_df, X_scaled
+        return labels, mock_pca_obj, coords_df, X_scaled_sim # X_scaled_sim est retourné mais non utilisé
 
     core = type('CoreModule', (object,), {'analyse': mock_analyse, 'read_reference': lambda fp: pd.DataFrame()})
 
@@ -153,10 +151,10 @@ def load_data(file_path="data_ref.csv"):
                                 [f"Espece Beta {i}" for i in range(1, 11)] + \
                                 [f"Espece Gamma {i}" for i in range(1, 11)]
             data = pd.DataFrame({
-                'Espece': example_species, # Assumed to be the identifier by core.py
+                'Espece': example_species, 
                 'Trait_Num_1': np.random.rand(30) * 10,
                 'Trait_Num_2': np.random.randint(1, 100, 30),
-                'Trait_Cat_1': np.random.choice(['X', 'Y', 'Z'], 30), # Categorical trait
+                'Trait_Cat_1': np.random.choice(['X', 'Y', 'Z'], 30), 
                 'Humidité_édaphique': np.random.rand(30) * 5 + 1, 
                 'Matière_organique': np.random.rand(30) * 10,
                 'Lumière': np.random.rand(30) * 1000
@@ -252,7 +250,7 @@ def load_ecology_data(file_path="data_ecologie_espece.csv"):
         return pd.DataFrame(columns=['Description_Ecologie']).set_index(pd.Index([], name='Espece_norm'))
     except Exception as e:
         print(f"AVERTISSEMENT: Impossible de charger les données écologiques depuis '{file_path}': {e}.")
-        st.toast(f"Erreur chargement fichier écologique.", icon="🔥")
+        st.toast(f"Erreur chargement fichier écologique.", icon="�")
         return pd.DataFrame(columns=['Description_Ecologie']).set_index(pd.Index([], name='Espece_norm'))
 
 ecology_df = load_ecology_data()
@@ -268,7 +266,7 @@ default_session_states = {
     'vip_data_df_interactive_snapshot_for_comparison': pd.DataFrame(), 
     'sub': pd.DataFrame(), 
     'pdf': pd.DataFrame(), 
-    'X_for_dendro': np.array([]), 
+    # 'X_for_dendro': np.array([]), # SUPPRIMÉ: Dendrogramme retiré
     'numeric_trait_names_for_interactive_plot': [],
     'selected_habitats_indices': [], 
     'previous_num_cols': 0,
@@ -336,35 +334,48 @@ if not current_releves_df_for_selection.empty and \
         idx for idx in st.session_state.selected_habitats_indices if idx < num_actual_cols
     ]
 
-    if num_actual_cols > 0:
-        button_cols_layout = st.columns(num_actual_cols) 
-        
-        for i in range(num_actual_cols):
+    # MODIFIÉ: Filtrer les colonnes pour ne montrer que celles avec des données d'espèces
+    valid_habitat_buttons_info = []
+    for i in range(num_actual_cols):
+        # Vérifier si la colonne (à partir de la deuxième ligne) contient des données d'espèces valides
+        species_in_col = current_releves_df_for_selection.iloc[1:, i].dropna().astype(str).str.strip().replace('', np.nan).dropna()
+        if not species_in_col.empty:
             habitat_name_for_button = habitat_names_from_df[i] if pd.notna(habitat_names_from_df[i]) and str(habitat_names_from_df[i]).strip() != "" else f"Relevé {i+1}"
-            is_selected = (i in st.session_state.selected_habitats_indices) 
+            valid_habitat_buttons_info.append({'index': i, 'name': habitat_name_for_button})
+
+    if valid_habitat_buttons_info:
+        num_buttons_to_show = len(valid_habitat_buttons_info)
+        button_cols_layout = st.columns(num_buttons_to_show) 
+        
+        for k, habitat_info in enumerate(valid_habitat_buttons_info):
+            col_idx = habitat_info['index']
+            habitat_name_display = habitat_info['name']
+            is_selected = (col_idx in st.session_state.selected_habitats_indices) 
             
             button_type = "primary" if is_selected else "secondary"
-            button_key = f"habitat_select_button_{i}" 
+            button_key = f"habitat_select_button_{col_idx}" # Utiliser l'index original pour la clé
 
-            with button_cols_layout[i]:
+            with button_cols_layout[k]: # Utiliser l'index de la boucle sur les boutons valides
                 st.markdown(f'<div class="habitat-select-button">', unsafe_allow_html=True)
-                if st.button(habitat_name_for_button, key=button_key, type=button_type, use_container_width=True):
+                if st.button(habitat_name_display, key=button_key, type=button_type, use_container_width=True):
                     if is_selected:
-                        st.session_state.selected_habitats_indices.remove(i)
+                        st.session_state.selected_habitats_indices.remove(col_idx)
                     else:
-                        st.session_state.selected_habitats_indices.append(i)
+                        st.session_state.selected_habitats_indices.append(col_idx)
                     st.session_state.run_main_analysis_once = False 
                     st.session_state.analysis_has_run_for_current_selection = False 
                     st.rerun()
                 st.markdown('</div>', unsafe_allow_html=True)
-    else:
+    elif num_actual_cols > 0 : # Il y a des colonnes, mais aucune avec des données d'espèces
+        st.info("Aucune colonne ne contient de données d'espèces pour la sélection. Veuillez ajouter des espèces sous les noms d'habitats.")
+    else: # Aucune colonne du tout
         st.info("Ajoutez des colonnes au tableau pour pouvoir sélectionner des relevés.")
 else:
     st.warning("Le tableau de données est vide ou ne contient pas de colonnes pour la sélection.")
 
 
-fig_pca = None
-fig_dend = None
+# fig_pca = None # Déjà initialisé globalement
+# fig_dend = None # SUPPRIMÉ: Dendrogramme retiré
 
 if st.session_state.selected_habitats_indices and \
     not ref.empty and \
@@ -375,7 +386,7 @@ if st.session_state.selected_habitats_indices and \
 
     st.session_state.sub = pd.DataFrame()
     st.session_state.pdf = pd.DataFrame()
-    st.session_state.X_for_dendro = np.array([])
+    # st.session_state.X_for_dendro = np.array([]) # SUPPRIMÉ
     st.session_state.vip_data_df_interactive = pd.DataFrame()
     st.session_state.numeric_trait_names_for_interactive_plot = []
 
@@ -473,9 +484,9 @@ if st.session_state.selected_habitats_indices and \
                     st.session_state.analysis_has_run_for_current_selection = False
                     raise ValueError("Aucun trait numérique pour l'ACP.")
                 else:
-                    labels, pca_results, coords_df_from_core, X_scaled_data = core.analyse(sub_for_analysis_call_prepared, n_clusters_selected_main)
+                    # X_scaled_data n'est plus assigné à st.session_state.X_for_dendro
+                    labels, pca_results, coords_df_from_core, _ = core.analyse(sub_for_analysis_call_prepared, n_clusters_selected_main)
                     
-                    # **CORRECTION APPLIQUÉE ICI pour gérer le type de coords_df_from_core**
                     if not isinstance(coords_df_from_core, pd.DataFrame):
                         if isinstance(coords_df_from_core, np.ndarray) and coords_df_from_core.ndim == 2 and coords_df_from_core.shape[0] == len(sub_for_analysis_call_prepared):
                             num_pcs = coords_df_from_core.shape[1]
@@ -487,13 +498,12 @@ if st.session_state.selected_habitats_indices and \
                             st.session_state.run_main_analysis_once = False
                             st.session_state.analysis_has_run_for_current_selection = False
                             raise TypeError("Format coords_df incorrect depuis core.analyse.")
-                    else: # C'est déjà un DataFrame
+                    else: 
                         coords_df = coords_df_from_core 
                     
-                    # Maintenant, coords_df devrait être un DataFrame. Vérifier son index.
                     if not coords_df.index.equals(sub_for_analysis_call_prepared.index):
                         st.error("L'index des coordonnées PCA (coords_df) ne correspond pas aux données d'entrée après conversion/vérification. L'alignement des données a échoué.")
-                        if len(coords_df) == len(sub_for_analysis_call_prepared): # Tenter de réindexer si les longueurs correspondent
+                        if len(coords_df) == len(sub_for_analysis_call_prepared): 
                             coords_df.index = sub_for_analysis_call_prepared.index
                             st.warning("Index des coordonnées PCA (coords_df) forcé au réalignement.")
                         else:
@@ -554,7 +564,7 @@ if st.session_state.selected_habitats_indices and \
                                 st.session_state.vip_data_df_for_calc = pd.DataFrame(columns=["Variable", "Communalité (%)"])
                                 st.warning("Résultats PCA incomplets pour communalités (components_ ou explained_variance_ manquants/incorrects).")
                             
-                            st.session_state.X_for_dendro = X_scaled_data if isinstance(X_scaled_data, np.ndarray) else np.array([])
+                            # st.session_state.X_for_dendro = X_scaled_data if isinstance(X_scaled_data, np.ndarray) else np.array([]) # SUPPRIMÉ
                             st.session_state.numeric_trait_names_for_interactive_plot = actual_numeric_traits_for_pca
                             
                             default_x_init, default_y_init = None, None
@@ -886,42 +896,11 @@ if st.session_state.run_main_analysis_once:
                 dragmode='pan'
             )
         else: 
-            fig_pca = None 
+            fig_pca = None # Réinitialiser fig_pca si les conditions ne sont pas remplies
             if not pdf_display_pca.empty : 
                 with col_pca_plot_area: st.warning("Moins de deux composantes principales disponibles pour le graphique PCA. Le graphique ne peut être affiché.")
-
-    X_for_dendro_display = st.session_state.get('X_for_dendro', np.array([]))
-    pdf_display_dendro_labels = st.session_state.get('pdf', pd.DataFrame()) 
-
-    if isinstance(X_for_dendro_display, np.ndarray) and X_for_dendro_display.ndim == 2 and \
-        X_for_dendro_display.shape[0] > 1 and X_for_dendro_display.shape[1] > 0:
-        try:
-            Z = linkage(X_for_dendro_display, method="ward")
-            dyn_thresh = 0
-            n_clust_for_dendro_color = st.session_state.get('n_clusters_slider_main_value', 3) 
-
-            if n_clust_for_dendro_color > 1 and (n_clust_for_dendro_color -1) < Z.shape[0] : 
-                dyn_thresh = Z[-(n_clust_for_dendro_color-1), 2] * 0.99 if Z.shape[0] >= (n_clust_for_dendro_color-1) else (Z[-1,2] * 0.5 if Z.shape[0]>0 else 0)
-            elif Z.shape[0] > 0: dyn_thresh = Z[0, 2] / 2
-            
-            if not pdf_display_dendro_labels.empty and "Espece_User" in pdf_display_dendro_labels.columns and \
-               "Source_Habitat" in pdf_display_dendro_labels.columns and \
-               len(pdf_display_dendro_labels) == X_for_dendro_display.shape[0]:
-                dendro_labels = [f"{row['Espece_User']} ({row['Source_Habitat']})" for _, row in pdf_display_dendro_labels.iterrows()]
-            else: 
-                dendro_labels = [f"Esp {i+1}" for i in range(X_for_dendro_display.shape[0])]
-
-            fig_dend = ff.create_dendrogram(X_for_dendro_display, orientation="left", labels=dendro_labels, 
-                                            linkagefun=lambda _: Z, 
-                                            color_threshold=dyn_thresh if n_clust_for_dendro_color > 1 else 0, 
-                                            colorscale=COLOR_SEQUENCE)
-            fig_dend.update_layout(template="plotly_dark", 
-                                height=max(400, X_for_dendro_display.shape[0] * 20), 
-                                title_text="Dendrogramme des espèces (instances par habitat)", title_x=0.5)
-        except Exception as e: 
-            print(f"Erreur lors de la création du dendrogramme: {e}")
-            fig_dend = None
-    else: fig_dend = None
+    # SUPPRIMÉ: Section de création de fig_dend
+    # else: fig_dend = None # Déjà géré globalement ou non nécessaire
 
 
 with col_pca_plot_area: 
@@ -929,7 +908,7 @@ with col_pca_plot_area:
     elif st.session_state.run_main_analysis_once and st.session_state.get('sub', pd.DataFrame()).empty:
         st.warning("L'analyse n'a pas produit de résultats affichables pour le PCA (pas d'espèces traitées ou PCA impossible).")
     elif st.session_state.run_main_analysis_once and fig_pca is None and not st.session_state.get('pdf', pd.DataFrame()).empty : 
-        pass 
+        pass # Le message d'avertissement pour PCA est déjà géré ci-dessus si y_pca_col est None
     elif st.session_state.run_main_analysis_once :
         st.warning("Le graphique PCA n'a pas pu être généré. Vérifiez les données d'entrée et les paramètres.")
 
@@ -972,18 +951,4 @@ elif st.session_state.run_main_analysis_once:
     st.info("Analyse lancée, mais aucune donnée d'espèce n'a pu être traitée pour la composition des clusters.")
 
 
-# ---------------------------------------------------------------------------- #
-# ÉTAPE 5: AFFICHAGE DU DENDROGRAMME
-# ---------------------------------------------------------------------------- #
-if st.session_state.run_main_analysis_once and not st.session_state.get('sub', pd.DataFrame()).empty : 
-    st.markdown("---"); st.subheader("Étape 5: Dendrogramme") 
-    if fig_dend: st.plotly_chart(fig_dend, use_container_width=True)
-    elif st.session_state.get('X_for_dendro', np.array([])).shape[0] <= 1 and \
-        len(st.session_state.get('pdf', pd.DataFrame())) > 0 : 
-        st.info("Le dendrogramme n'a pas pu être généré (nécessite au moins 2 instances d'espèces uniques après traitement ou problème de données pour le linkage).")
-    elif st.session_state.run_main_analysis_once : 
-        st.info("Le dendrogramme n'a pas pu être généré. Vérifiez les données d'entrée (nombre d'instances d'espèces > 1, traits numériques).")
-elif st.session_state.run_main_analysis_once: 
-    st.markdown("---"); st.subheader("Étape 5: Dendrogramme")
-    st.info("Analyse lancée, mais aucune donnée d'espèce n'a pu être traitée pour le dendrogramme.")
-
+�
