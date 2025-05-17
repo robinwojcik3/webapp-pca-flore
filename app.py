@@ -139,7 +139,7 @@ LABEL_FONT_SIZE_ON_PLOTS = 15
 HOVER_SPECIES_FONT_SIZE = 15  
 HOVER_ECOLOGY_TITLE_FONT_SIZE = 14 
 HOVER_ECOLOGY_TEXT_FONT_SIZE = 13  
-SYNTAXON_DATA_FILE = "data_villaret.csv" # Nom du fichier pour les données de syntaxons
+SYNTAXON_DATA_FILE = "data_villaret.csv" 
 
 @st.cache_data
 def load_data(file_path="data_ref.csv"):
@@ -213,7 +213,7 @@ def load_ecology_data(file_path="data_ecologie_espece.csv"):
             header=None,
             usecols=[0, 1],
             names=['Espece', 'Description_Ecologie'],
-            encoding='utf-8-sig',
+            encoding='utf-8-sig', # Tente utf-8-sig d'abord pour BOM
             keep_default_na=False, 
             na_values=[''] 
         )
@@ -236,6 +236,41 @@ def load_ecology_data(file_path="data_ecologie_espece.csv"):
         eco_data = eco_data.set_index('Espece_norm') 
         return eco_data[["Description_Ecologie"]] 
     
+    except UnicodeDecodeError: # Si utf-8-sig échoue, essayer latin-1
+        try:
+            st.info(f"Échec du décodage UTF-8 pour '{file_path}', tentative avec Latin-1...")
+            eco_data = pd.read_csv(
+                file_path,
+                sep=';',
+                header=None,
+                usecols=[0, 1],
+                names=['Espece', 'Description_Ecologie'],
+                encoding='latin-1',
+                keep_default_na=False, 
+                na_values=[''] 
+            )
+            # Le reste du traitement est identique
+            eco_data = eco_data.dropna(subset=['Espece']) 
+            eco_data['Espece'] = eco_data['Espece'].astype(str).str.strip()
+            eco_data = eco_data[eco_data['Espece'] != ""] 
+
+            if eco_data.empty:
+                st.warning(f"Le fichier écologique '{file_path}' (lu avec Latin-1) est vide ou ne contient aucune donnée d'espèce valide.")
+                return pd.DataFrame(columns=['Description_Ecologie']).set_index(pd.Index([], name='Espece_norm'))
+
+            eco_data['Espece_norm'] = (
+                eco_data['Espece']
+                .str.split()
+                .str[:2]
+                .str.join(" ")
+                .str.lower()
+            )
+            eco_data = eco_data.drop_duplicates(subset=['Espece_norm'], keep='first')
+            eco_data = eco_data.set_index('Espece_norm') 
+            return eco_data[["Description_Ecologie"]]
+        except Exception as e_latin1:
+            st.error(f"Impossible de lire le fichier écologique '{file_path}' avec UTF-8 ou Latin-1. Erreur Latin-1: {e_latin1}")
+            return pd.DataFrame(columns=['Description_Ecologie']).set_index(pd.Index([], name='Espece_norm'))
     except FileNotFoundError:
         print(f"AVERTISSEMENT: Fichier de données écologiques '{file_path}' non trouvé.")
         st.toast(f"Fichier écologique '{file_path}' non trouvé.", icon="⚠️")
@@ -249,7 +284,7 @@ def load_ecology_data(file_path="data_ecologie_espece.csv"):
         return pd.DataFrame(columns=['Description_Ecologie']).set_index(pd.Index([], name='Espece_norm'))
     except Exception as e:
         print(f"AVERTISSEMENT: Impossible de charger les données écologiques depuis '{file_path}': {e}.")
-        st.toast(f"Erreur chargement fichier écologique.", icon="🔥") # Correction de l'icône
+        st.toast(f"Erreur chargement fichier écologique.", icon="🔥")
         return pd.DataFrame(columns=['Description_Ecologie']).set_index(pd.Index([], name='Espece_norm'))
 
 ecology_df = load_ecology_data()
@@ -259,49 +294,45 @@ ecology_df = load_ecology_data()
 # ---------------------------------------------------------------------------- #
 @st.cache_data
 def load_syntaxon_data(file_path):
-    """
-    Charge et traite les données des syntaxons à partir d'un fichier CSV.
-    Le fichier attendu a :
-    - Colonne 0: ID du syntaxon (non utilisé directement pour l'analyse des espèces)
-    - Colonne 1: Nom du syntaxon (non utilisé directement pour l'analyse des espèces)
-    - Colonnes 2+ : Noms des espèces caractéristiques du syntaxon.
-    Retourne une liste de sets, où chaque set contient les noms normalisés (binomial, lowercase)
-    des espèces pour un syntaxon.
-    """
     try:
-        # Lire toutes les colonnes comme des chaînes pour éviter les problèmes de type et gérer les NaN
-        df_syntaxons = pd.read_csv(file_path, sep=';', header=None, dtype=str)
-        
-        if df_syntaxons.empty:
-            st.warning(f"Le fichier de données des syntaxons '{file_path}' est vide.")
+        # Essayer avec utf-8 d'abord
+        df_syntaxons = pd.read_csv(file_path, sep=';', header=None, dtype=str, encoding='utf-8')
+    except UnicodeDecodeError:
+        try:
+            # Si utf-8 échoue, essayer avec latin-1
+            st.info(f"Échec du décodage UTF-8 pour '{file_path}', tentative avec Latin-1...")
+            df_syntaxons = pd.read_csv(file_path, sep=';', header=None, dtype=str, encoding='latin-1')
+        except Exception as e_latin1:
+            st.error(f"Impossible de lire le fichier des syntaxons '{file_path}' avec UTF-8 ou Latin-1. Erreur Latin-1: {e_latin1}")
             return []
-
-        list_of_syntaxon_species_sets = []
-        # Itérer sur chaque ligne (chaque syntaxon)
-        for index, row in df_syntaxons.iterrows():
-            # Prendre les espèces à partir de la 3ème colonne (index 2)
-            # et ignorer les valeurs NaN qui sont lues comme 'nan' chaîne après dtype=str
-            species_in_row = [
-                " ".join(str(s).strip().split()[:2]).lower() 
-                for s in row.iloc[2:].tolist() 
-                if pd.notna(s) and str(s).strip() and str(s).lower() != 'nan'
-            ]
-            if species_in_row: # Ajouter seulement s'il y a des espèces valides
-                list_of_syntaxon_species_sets.append(set(species_in_row))
-        
-        if not list_of_syntaxon_species_sets:
-            st.warning(f"Aucune donnée d'espèce valide trouvée dans '{file_path}' après traitement.")
-        
-        return list_of_syntaxon_species_sets
     except FileNotFoundError:
         st.error(f"ERREUR: Fichier de données des syntaxons '{file_path}' non trouvé.")
         return []
     except pd.errors.EmptyDataError:
         st.warning(f"Le fichier de données des syntaxons '{file_path}' est vide.")
         return []
-    except Exception as e:
-        st.error(f"Erreur lors du chargement ou du traitement du fichier des syntaxons '{file_path}': {e}")
+    except Exception as e: # Autres erreurs potentielles (ex: permissions)
+        st.error(f"Erreur lors du chargement du fichier des syntaxons '{file_path}': {e}")
         return []
+        
+    if df_syntaxons.empty:
+        st.warning(f"Le fichier de données des syntaxons '{file_path}' est vide après chargement.")
+        return []
+
+    list_of_syntaxon_species_sets = []
+    for index, row in df_syntaxons.iterrows():
+        species_in_row = [
+            " ".join(str(s).strip().split()[:2]).lower() 
+            for s in row.iloc[2:].tolist() 
+            if pd.notna(s) and str(s).strip() and str(s).lower() != 'nan'
+        ]
+        if species_in_row: 
+            list_of_syntaxon_species_sets.append(set(species_in_row))
+    
+    if not list_of_syntaxon_species_sets:
+        st.warning(f"Aucune donnée d'espèce valide trouvée dans '{file_path}' après traitement.")
+    
+    return list_of_syntaxon_species_sets
 
 syntaxon_species_list_of_sets = load_syntaxon_data(SYNTAXON_DATA_FILE)
 
@@ -789,301 +820,4 @@ if st.session_state.run_main_analysis_once and not st.session_state.get('sub', p
                 }).set_index(pdf_plot.index) 
                 
                 plot_data_to_use = plot_data_interactive.copy()
-                temp_x_col_grp = "_temp_x"; temp_y_col_grp = "_temp_y"
-                plot_data_to_use[temp_x_col_grp] = plot_data_to_use[x_axis_plot]; plot_data_to_use[temp_y_col_grp] = plot_data_to_use[y_axis_plot]
-                duplicates_mask = plot_data_to_use.duplicated(subset=[temp_x_col_grp, temp_y_col_grp], keep=False)
-                if duplicates_mask.any():
-                    x_min_val, x_max_val = plot_data_to_use[x_axis_plot].min(), plot_data_to_use[x_axis_plot].max()
-                    y_min_val, y_max_val = plot_data_to_use[y_axis_plot].min(), plot_data_to_use[y_axis_plot].max()
-                    x_range_val = (x_max_val - x_min_val) if pd.notna(x_max_val) and pd.notna(x_min_val) else 0
-                    y_range_val = (y_max_val - y_min_val) if pd.notna(y_max_val) and pd.notna(y_min_val) else 0
-                    jitter_x = x_range_val*0.015 if x_range_val >1e-9 else (abs(plot_data_to_use[x_axis_plot].mean())*0.015 if abs(plot_data_to_use[x_axis_plot].mean()) >1e-9 else 0.015)
-                    jitter_y = y_range_val*0.015 if y_range_val >1e-9 else (abs(plot_data_to_use[y_axis_plot].mean())*0.015 if abs(plot_data_to_use[y_axis_plot].mean()) >1e-9 else 0.015)
-                    if abs(jitter_x) <1e-9: jitter_x=0.015
-                    if abs(jitter_y) <1e-9: jitter_y=0.015
-                    
-                    for _, group in plot_data_to_use[duplicates_mask].groupby([temp_x_col_grp, temp_y_col_grp]):
-                        if len(group) > 1:
-                            if not pd.api.types.is_float_dtype(plot_data_to_use[x_axis_plot]): plot_data_to_use[x_axis_plot] = plot_data_to_use[x_axis_plot].astype(float)
-                            if not pd.api.types.is_float_dtype(plot_data_to_use[y_axis_plot]): plot_data_to_use[y_axis_plot] = plot_data_to_use[y_axis_plot].astype(float)
-                            for i, idx in enumerate(group.index):
-                                angle = 2 * np.pi * i / len(group)
-                                plot_data_to_use.loc[idx, x_axis_plot] += jitter_x * np.cos(angle)
-                                plot_data_to_use.loc[idx, y_axis_plot] += jitter_y * np.sin(angle)
-                plot_data_to_use.drop(columns=[temp_x_col_grp, temp_y_col_grp], inplace=True) 
-
-                color_by_interactive = "Source_Habitat" if len(st.session_state.selected_habitats_indices) > 1 else "Cluster"
-                legend_title_interactive = "Habitat d'Origine" if len(st.session_state.selected_habitats_indices) > 1 else "Cluster PCA"
-
-                fig_interactive_scatter = px.scatter(
-                    plot_data_to_use, x=x_axis_plot, y=y_axis_plot,
-                    color=color_by_interactive, 
-                    text="Espece_User", hover_name="Espece_User",
-                    custom_data=["Espece_User", "Ecologie", "Source_Habitat", "Cluster"], 
-                    template="plotly_dark", height=600, color_discrete_sequence=COLOR_SEQUENCE
-                )
-                fig_interactive_scatter.update_traces(
-                    textposition="top center", marker=dict(opacity=0.8, size=8),
-                    textfont=dict(size=LABEL_FONT_SIZE_ON_PLOTS),
-                    hovertemplate=(
-                        f"<span style='font-size: {HOVER_SPECIES_FONT_SIZE}px;'><b>%{{customdata[0]}}</b></span><br>"
-                        f"Habitat: %{{customdata[2]}}<br>"
-                        f"Cluster PCA: %{{customdata[3]}}<br>"
-                        f"<br><span style='font-size: {HOVER_ECOLOGY_TITLE_FONT_SIZE}px;'><i>Écologie:</i></span><br>"
-                        f"<span style='font-size: {HOVER_ECOLOGY_TEXT_FONT_SIZE}px;'>%{{customdata[1]}}</span>"
-                        "<extra></extra>" 
-                    )
-                )
-                
-                unique_groups_interactive = sorted(plot_data_to_use[color_by_interactive].unique())
-                extended_color_sequence_interactive = COLOR_SEQUENCE * (len(unique_groups_interactive) // len(COLOR_SEQUENCE) + 1)
-                group_color_map_interactive = {
-                    lbl: extended_color_sequence_interactive[i % len(extended_color_sequence_interactive)] for i, lbl in enumerate(unique_groups_interactive)
-                }
-
-                for group_label in unique_groups_interactive:
-                    group_points_df_interactive = plot_data_to_use[plot_data_to_use[color_by_interactive] == group_label]
-                    if x_axis_plot in group_points_df_interactive and y_axis_plot in group_points_df_interactive:
-                        points_for_hull = group_points_df_interactive[[x_axis_plot, y_axis_plot]].drop_duplicates().values
-                        if len(points_for_hull) >= MIN_POINTS_FOR_HULL:
-                            try:
-                                hull_interactive = ConvexHull(points_for_hull) 
-                                hull_path_interactive = points_for_hull[np.append(hull_interactive.vertices, hull_interactive.vertices[0])]
-                                clr_int = group_color_map_interactive.get(group_label, COLOR_SEQUENCE[0])
-                                fig_interactive_scatter.add_trace(go.Scatter(
-                                    x=hull_path_interactive[:, 0], y=hull_path_interactive[:, 1], 
-                                    fill="toself", fillcolor=clr_int,
-                                    line=dict(color=clr_int, width=1.5), mode='lines', 
-                                    name=f'{legend_title_interactive} {group_label} Hull', opacity=0.2, 
-                                    showlegend=False, hoverinfo='skip' 
-                                ))
-                            except Exception as e: print(f"Erreur calcul Hull interactif {group_label} ({x_axis_plot}, {y_axis_plot}): {e}")
-                
-                fig_interactive_scatter.update_layout(
-                    title_text=f"{y_axis_plot} vs. {x_axis_plot}", title_x=0.5,
-                    xaxis_title=x_axis_plot, yaxis_title=y_axis_plot, dragmode='pan',
-                    legend_title_text=legend_title_interactive 
-                )
-                st.plotly_chart(fig_interactive_scatter, use_container_width=True, config={'scrollZoom': True})
-
-elif st.session_state.run_main_analysis_once and st.session_state.get('sub', pd.DataFrame()).empty :
-    st.markdown("---")
-    st.subheader("Étape 2: Exploration Interactive et Paramètres ACP")
-    st.warning("L'analyse principale n'a pas abouti à des données suffisantes pour cette section (aucune espèce trouvée ou traitée). Veuillez vérifier les étapes précédentes.")
-
-
-# ---------------------------------------------------------------------------- #
-# ÉTAPE 3: VISUALISATION PRINCIPALE (ACP)
-# ---------------------------------------------------------------------------- #
-st.markdown("---")
-st.subheader("Étape 3: Visualisation Principale (ACP)")
-_, col_pca_plot_area = st.columns([0.01, 0.99]) 
-
-if st.session_state.run_main_analysis_once: 
-    pdf_display_pca = st.session_state.get('pdf', pd.DataFrame())
-    
-    if not pdf_display_pca.empty and "PC1" in pdf_display_pca.columns and "Cluster" in pdf_display_pca.columns and \
-        "Espece_User" in pdf_display_pca.columns and "Ecologie" in pdf_display_pca.columns and "Source_Habitat" in pdf_display_pca.columns:
-        
-        y_pca_col = "PC2" if "PC2" in pdf_display_pca.columns else None
-        
-        if "PC1" in pdf_display_pca.columns and y_pca_col : 
-            color_by_pca = "Source_Habitat" if len(st.session_state.selected_habitats_indices) > 1 else "Cluster"
-            legend_title_pca = "Habitat d'Origine" if len(st.session_state.selected_habitats_indices) > 1 else "Cluster PCA"
-
-            fig_pca = px.scatter(
-                pdf_display_pca, x="PC1", y=y_pca_col, 
-                color=color_by_pca, 
-                text="Espece_User", 
-                hover_name="Espece_User", 
-                custom_data=["Espece_User", "Ecologie", "Source_Habitat", "Cluster"], 
-                template="plotly_dark", height=500, color_discrete_sequence=COLOR_SEQUENCE
-            )
-            fig_pca.update_traces(
-                textposition="top center", marker=dict(opacity=0.7), 
-                hovertemplate=(
-                    f"<span style='font-size: {HOVER_SPECIES_FONT_SIZE}px;'><b>%{{customdata[0]}}</b></span><br>"
-                    f"Habitat: %{{customdata[2]}}<br>"
-                    f"Cluster PCA: %{{customdata[3]}}<br>"
-                    f"<br><span style='font-size: {HOVER_ECOLOGY_TITLE_FONT_SIZE}px;'><i>Écologie:</i></span><br>"
-                    f"<span style='font-size: {HOVER_ECOLOGY_TEXT_FONT_SIZE}px;'>%{{customdata[1]}}</span>"
-                    "<extra></extra>"
-                ), 
-                textfont=dict(size=LABEL_FONT_SIZE_ON_PLOTS)
-            ) 
-            
-            unique_groups_pca = sorted(pdf_display_pca[color_by_pca].unique())
-            extended_color_sequence_pca = COLOR_SEQUENCE * (len(unique_groups_pca) // len(COLOR_SEQUENCE) + 1)
-            group_color_map_pca = {
-                lbl: extended_color_sequence_pca[i % len(extended_color_sequence_pca)] for i, lbl in enumerate(unique_groups_pca)
-            }
-            
-            for group_label_pca in unique_groups_pca:
-                group_points_df_pca = pdf_display_pca[pdf_display_pca[color_by_pca] == group_label_pca]
-                if not group_points_df_pca.empty and "PC1" in group_points_df_pca.columns and y_pca_col in group_points_df_pca.columns:
-                    unique_group_points_pca = group_points_df_pca[["PC1", y_pca_col]].drop_duplicates().values
-                    if len(unique_group_points_pca) >= MIN_POINTS_FOR_HULL:
-                        try:
-                            hull_pca_calc = ConvexHull(unique_group_points_pca)
-                            hull_path_pca = unique_group_points_pca[np.append(hull_pca_calc.vertices, hull_pca_calc.vertices[0])] 
-                            clr_pca = group_color_map_pca.get(group_label_pca, COLOR_SEQUENCE[0])
-                            fig_pca.add_trace(go.Scatter(
-                                x=hull_path_pca[:, 0], y=hull_path_pca[:, 1], fill="toself", fillcolor=clr_pca, 
-                                line=dict(color=clr_pca, width=1.5), mode='lines', 
-                                name=f'{legend_title_pca} {group_label_pca} Hull', opacity=0.2, 
-                                showlegend=False, hoverinfo='skip'
-                            ))
-                        except Exception as e: print(f"Erreur calcul Hull ACP pour groupe {group_label_pca}: {e}")
-            fig_pca.update_layout(
-                title_text="Plot PCA des espèces", title_x=0.5, 
-                legend_title_text=legend_title_pca, 
-                dragmode='pan'
-            )
-        else: 
-            fig_pca = None 
-            if not pdf_display_pca.empty : 
-                with col_pca_plot_area: st.warning("Moins de deux composantes principales disponibles pour le graphique PCA. Le graphique ne peut être affiché.")
-
-with col_pca_plot_area: 
-    if fig_pca: st.plotly_chart(fig_pca, use_container_width=True, config={'scrollZoom': True}) 
-    elif st.session_state.run_main_analysis_once and st.session_state.get('sub', pd.DataFrame()).empty:
-        st.warning("L'analyse n'a pas produit de résultats affichables pour le PCA (pas d'espèces traitées ou PCA impossible).")
-    elif st.session_state.run_main_analysis_once and fig_pca is None and not st.session_state.get('pdf', pd.DataFrame()).empty : 
-        pass 
-    elif st.session_state.run_main_analysis_once :
-        st.warning("Le graphique PCA n'a pas pu être généré. Vérifiez les données d'entrée et les paramètres.")
-
-
-# ---------------------------------------------------------------------------- #
-# ÉTAPE 4: COMPOSITION DES CLUSTERS (ACP)
-# ---------------------------------------------------------------------------- #
-if st.session_state.run_main_analysis_once and not st.session_state.get('sub', pd.DataFrame()).empty: 
-    st.markdown("---"); st.subheader("Étape 4: Composition des Clusters (issus de l'ACP)")
-    pdf_compo = st.session_state.get('pdf', pd.DataFrame())
-    if not pdf_compo.empty and 'Cluster' in pdf_compo.columns and 'Espece_User' in pdf_compo.columns and 'Source_Habitat' in pdf_compo.columns:
-        pdf_compo['Species_Instance_Display'] = pdf_compo['Espece_User'] + " (" + pdf_compo['Source_Habitat'] + ")"
-        
-        compositions_display = []
-        for c_pca in sorted(pdf_compo["Cluster"].unique()):
-            cluster_data = pdf_compo[pdf_compo["Cluster"] == c_pca]
-            unique_species_instances_in_cluster = cluster_data["Species_Instance_Display"].unique()
-            compositions_display.append({
-                "cluster_label": c_pca, 
-                "count": len(unique_species_instances_in_cluster), 
-                "species_list": sorted(list(unique_species_instances_in_cluster))
-            })
-
-        if compositions_display and any(d['count'] > 0 for d in compositions_display):
-            num_clusters_disp = len([d for d in compositions_display if d['count']>0]) 
-            num_cols_disp = min(num_clusters_disp, 3) if num_clusters_disp > 0 else 1
-            cluster_cols_layout = st.columns(num_cols_disp)
-            col_idx = 0
-            for comp_data in compositions_display:
-                if comp_data['count'] > 0: 
-                    with cluster_cols_layout[col_idx % num_cols_disp]:
-                        st.markdown(f"**Cluster PCA {comp_data['cluster_label']}** ({comp_data['count']} instances d'espèces)")
-                        for species_instance_name in comp_data['species_list']: st.markdown(f"- {species_instance_name}")
-                    col_idx += 1
-            if col_idx == 0 : st.info("Aucun cluster (ACP) avec des espèces à afficher.")
-        else: st.info("La composition des clusters (ACP) sera affichée ici après l'analyse (pas de données de cluster).")
-    else: st.info("La composition des clusters (ACP) sera affichée ici après l'analyse (données de PCA non disponibles ou incomplètes).")
-elif st.session_state.run_main_analysis_once: 
-    st.markdown("---"); st.subheader("Étape 4: Composition des Clusters (ACP)")
-    st.info("Analyse lancée, mais aucune donnée d'espèce n'a pu être traitée pour la composition des clusters.")
-
-# ---------------------------------------------------------------------------- #
-# NOUVEAU: ÉTAPE 5: ANALYSE DES CO-OCCURRENCES D'ESPÈCES
-# ---------------------------------------------------------------------------- #
-if st.session_state.run_main_analysis_once and not st.session_state.get('sub', pd.DataFrame()).empty and syntaxon_species_list_of_sets:
-    st.markdown("---")
-    st.subheader("Étape 5: Analyse des Co-occurrences d'Espèces (basée sur data_villaret.csv)")
-
-    # Utiliser 'Espece_Ref_Original' de st.session_state.sub car ce sont les noms de la base de traits
-    # et normaliser ces noms pour la comparaison.
-    target_species_for_cooccurrence_raw = st.session_state.sub['Espece_Ref_Original'].unique()
-    
-    target_species_for_cooccurrence_normalized = [
-        " ".join(str(s).strip().split()[:2]).lower() 
-        for s in target_species_for_cooccurrence_raw 
-        if pd.notna(s) and str(s).strip()
-    ]
-    target_species_for_cooccurrence_normalized = sorted(list(set(target_species_for_cooccurrence_normalized)))
-
-    if not target_species_for_cooccurrence_normalized:
-        st.info("Aucune espèce de l'analyse principale à utiliser pour l'analyse des co-occurrences.")
-    else:
-        cooccurrence_results = []
-        for target_species_norm in target_species_for_cooccurrence_normalized:
-            neighbor_counts = Counter()
-            # Retrouver le nom original (avec majuscules) pour l'affichage, en prenant le premier correspondant
-            # Ceci est pour l'affichage, la logique de co-occurrence utilise les noms normalisés.
-            display_target_species_name = next((raw_name for raw_name in target_species_for_cooccurrence_raw 
-                                                if " ".join(str(raw_name).strip().split()[:2]).lower() == target_species_norm), 
-                                               target_species_norm)
-
-
-            for syntaxon_set in syntaxon_species_list_of_sets:
-                if target_species_norm in syntaxon_set:
-                    for neighbor_species_norm in syntaxon_set:
-                        if neighbor_species_norm != target_species_norm:
-                            neighbor_counts[neighbor_species_norm] += 1
-            
-            top_3_neighbors = neighbor_counts.most_common(3)
-            
-            result_row = {"Espèce Principale": display_target_species_name.capitalize()} # Capitalize for display
-            for i, (neighbor, count) in enumerate(top_3_neighbors):
-                # Essayer de retrouver le nom original du voisin pour l'affichage
-                # Cela suppose que les espèces de data_villaret sont aussi potentiellement dans data_ref
-                # Si non, on affiche le nom normalisé.
-                display_neighbor_name = neighbor # Fallback
-                if not ref.empty and 'Espece' in ref.columns:
-                    ref_match = ref_binom_series[ref_binom_series == neighbor].first_valid_index()
-                    if ref_match is not None:
-                        display_neighbor_name = ref.loc[ref_match, 'Espece']
-                
-                result_row[f"Voisin {i+1} (fréq: {count})"] = display_neighbor_name.capitalize() # Capitalize for display
-            
-            # S'assurer que les colonnes Voisin 1, 2, 3 existent même si moins de 3 voisins
-            for i in range(1, 4):
-                col_name_check = f"Voisin {i} (fréq: {top_3_neighbors[i-1][1] if i-1 < len(top_3_neighbors) else 0})" 
-                # Le nom de la colonne dépendra de la fréquence, donc on utilise un placeholder si non trouvé
-                # Pour simplifier, on va nommer les colonnes Voisin 1, Voisin 2, Voisin 3
-                # et mettre la fréquence dans la valeur ou en infobulle si possible.
-                # Pour le tableau simple, on met le nom et la fréquence.
-                
-                # Réajustement pour des noms de colonnes fixes :
-                col_name_fixed = f"Voisin {i}"
-                if i-1 < len(top_3_neighbors):
-                    neighbor_norm, count = top_3_neighbors[i-1]
-                    # Retrouver le nom original pour affichage
-                    display_neighbor_name_fixed = neighbor_norm # Fallback
-                    if not ref.empty and 'Espece' in ref.columns:
-                        ref_match_fixed = ref_binom_series[ref_binom_series == neighbor_norm].first_valid_index()
-                        if ref_match_fixed is not None:
-                            display_neighbor_name_fixed = ref.loc[ref_match_fixed, 'Espece']
-                    result_row[col_name_fixed] = f"{display_neighbor_name_fixed.capitalize()} ({count})"
-                else:
-                    result_row[col_name_fixed] = "N/A"
-
-
-            cooccurrence_results.append(result_row)
-
-        if cooccurrence_results:
-            cooccurrence_df = pd.DataFrame(cooccurrence_results)
-            # Réorganiser les colonnes pour s'assurer de l'ordre
-            cols_ordered = ["Espèce Principale", "Voisin 1", "Voisin 2", "Voisin 3"]
-            # Filtrer pour ne garder que les colonnes présentes dans le DataFrame (au cas où il y aurait moins de 3 voisins pour toutes les espèces)
-            cols_to_display = [col for col in cols_ordered if col in cooccurrence_df.columns]
-            
-            st.dataframe(cooccurrence_df[cols_to_display], use_container_width=True)
-        else:
-            st.info("Aucun résultat de co-occurrence à afficher pour les espèces sélectionnées.")
-elif st.session_state.run_main_analysis_once and not syntaxon_species_list_of_sets:
-    st.markdown("---")
-    st.subheader("Étape 5: Analyse des Co-occurrences d'Espèces")
-    st.warning(f"Les données de syntaxons ({SYNTAXON_DATA_FILE}) n'ont pas pu être chargées ou sont vides. L'analyse des co-occurrences est désactivée.")
-elif st.session_state.run_main_analysis_once:
-    st.markdown("---")
-    st.subheader("Étape 5: Analyse des Co-occurrences d'Espèces")
-    st.info("L'analyse principale n'a pas abouti à des données suffisantes (aucune espèce trouvée ou traitée) pour l'analyse des co-occurrences.")
-
+                temp_x_col_grp = "_temp_x"; temp_y_col_grp = "_temp
