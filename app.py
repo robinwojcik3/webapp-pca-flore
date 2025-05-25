@@ -581,29 +581,35 @@ if st.session_state.run_main_processing_once and not st.session_state.get('sub',
             elif x_axis_plot not in numeric_traits_plot or y_axis_plot not in numeric_traits_plot: st.warning("Traits sélectionnés non valides.")
             elif plot_data_to_use.empty or x_axis_plot not in plot_data_to_use.columns or y_axis_plot not in plot_data_to_use.columns: st.warning("Données de graphique non prêtes/incohérentes.")
             else: 
-                fig_interactive = px.scatter(plot_data_to_use, x=x_axis_plot, y=y_axis_plot, 
-                                             color="Groupe_Affichage", symbol='Symbole', size='marker_size',
-                                             text="Nom_Affichage", hover_name="Nom_Affichage", 
-                                             custom_data=["Nom_Affichage", "Ecologie", "Source_Habitat", "Source_Donnee"], 
-                                             template="plotly_dark", height=600, color_discrete_sequence=COLOR_SEQUENCE,
-                                             size_max=CENTROID_MARKER_SIZE + 5) 
-                fig_interactive.update_traces(textposition="top center", 
-                                              marker=dict(opacity=0.8, line=dict(width=0.5, color='DarkSlateGrey')), 
-                                              textfont=dict(size=LABEL_FONT_SIZE_ON_PLOTS), 
-                                              hovertemplate=(f"<span style='font-size: {HOVER_SPECIES_FONT_SIZE}px;'><b>%{{customdata[0]}}</b></span><br>Source: %{{customdata[3]}}<br>Habitat/Syntaxon: %{{customdata[2]}}<br><br><span style='font-size: {HOVER_ECOLOGY_TITLE_FONT_SIZE}px;'><i>Écologie:</i></span><br><span style='font-size: {HOVER_ECOLOGY_TEXT_FONT_SIZE}px;'>%{{customdata[1]}}</span><extra></extra>" ))
+                # Définir la palette de couleurs pour les groupes AVANT de créer le graphique
                 unique_groups_fig = sorted(plot_data_to_use["Groupe_Affichage"].unique())
                 extended_color_sequence_fig = COLOR_SEQUENCE * (len(unique_groups_fig) // len(COLOR_SEQUENCE) + 1)
                 group_color_map_fig = {
                     group_label: extended_color_sequence_fig[i % len(extended_color_sequence_fig)]
                     for i, group_label in enumerate(unique_groups_fig)
                 }
+
+                fig_interactive = px.scatter(plot_data_to_use, x=x_axis_plot, y=y_axis_plot, 
+                                             color="Groupe_Affichage", 
+                                             color_discrete_map=group_color_map_fig, # Utiliser la map de couleurs définie
+                                             symbol='Symbole', size='marker_size',
+                                             text="Nom_Affichage", hover_name="Nom_Affichage", 
+                                             custom_data=["Nom_Affichage", "Ecologie", "Source_Habitat", "Source_Donnee"], 
+                                             template="plotly_dark", height=600,
+                                             size_max=CENTROID_MARKER_SIZE + 5) 
+                
+                fig_interactive.update_traces(textposition="top center", 
+                                              marker=dict(opacity=0.8, line=dict(width=0.5, color='DarkSlateGrey')), 
+                                              textfont=dict(size=LABEL_FONT_SIZE_ON_PLOTS), 
+                                              hovertemplate=(f"<span style='font-size: {HOVER_SPECIES_FONT_SIZE}px;'><b>%{{customdata[0]}}</b></span><br>Source: %{{customdata[3]}}<br>Habitat/Syntaxon: %{{customdata[2]}}<br><br><span style='font-size: {HOVER_ECOLOGY_TITLE_FONT_SIZE}px;'><i>Écologie:</i></span><br><span style='font-size: {HOVER_ECOLOGY_TEXT_FONT_SIZE}px;'>%{{customdata[1]}}</span><extra></extra>" ))
+                
+                # S'assurer que les lignes des symboles de centroïdes correspondent à la couleur du groupe
                 for trace in fig_interactive.data: 
-                    if trace.name in group_color_map_fig:
-                        trace.marker.color = group_color_map_fig[trace.name]
-                        # Pour les symboles 'target-like', la couleur de la ligne du marqueur peut aussi prendre la couleur du groupe
-                        if trace.marker.symbol == 'circle-cross-open': 
-                            trace.marker.line.color = group_color_map_fig[trace.name]
-                            trace.marker.line.width = 1.5 # Légèrement plus épais pour la cible
+                    if trace.name in group_color_map_fig: # trace.name est le label du groupe
+                        # La couleur principale du marqueur est déjà gérée par color_discrete_map
+                        if hasattr(trace.marker, 'symbol') and trace.marker.symbol == 'circle-cross-open': 
+                            trace.marker.line.color = group_color_map_fig[trace.name] # Couleur de la ligne de la cible
+                            trace.marker.line.width = 2 # Épaisseur de la ligne de la cible
 
                 if 'plot_data_for_species_jitter' in locals() and not plot_data_for_species_jitter.empty:
                     unique_groups_for_hulls = sorted(plot_data_for_species_jitter["Groupe_Affichage"].unique())
@@ -614,7 +620,7 @@ if st.session_state.run_main_processing_once and not st.session_state.get('sub',
                             if len(hull_pts) >= MIN_POINTS_FOR_HULL: 
                                 try:
                                     hull = ConvexHull(hull_pts); hull_path_data = hull_pts[np.append(hull.vertices, hull.vertices[0])]
-                                    hull_clr = group_color_map_fig.get(grp_lbl_hull, COLOR_SEQUENCE[0]) 
+                                    hull_clr = group_color_map_fig.get(grp_lbl_hull, COLOR_SEQUENCE[0]) # Utiliser la couleur du groupe pour l'enveloppe
                                     fig_interactive.add_trace(go.Scatter(x=hull_path_data[:, 0], y=hull_path_data[:, 1], 
                                                                          fill="toself", fillcolor=hull_clr, 
                                                                          line=dict(color=hull_clr, width=1.5), 
