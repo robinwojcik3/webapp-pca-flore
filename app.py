@@ -1,99 +1,87 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import plotly.figure_factory as ff # Gardé au cas où core.py l'utilise encore
 import plotly.graph_objects as go
 from scipy.spatial import ConvexHull
 import numpy as np
 import textwrap # Importé pour la mise en forme du texte de survol
 from collections import defaultdict # Ajouté pour l'analyse de co-occurrence
 import re # Ajouté pour parser les comptes dans les chaînes de caractères
+from sklearn.preprocessing import StandardScaler # Ajouté pour le calcul de la contribution à la variance
 
-# Assurez-vous que le fichier core.py est dans le même répertoire ou accessible
-# Pour les besoins de cet exemple, si core.py n'est pas disponible,
-# nous allons simuler sa fonction analyse.
-try:
-    import core
-except ImportError:
-    st.warning("Le module 'core.py' est introuvable. Une fonction d'analyse simulée sera utilisée. L'ACP réelle ne fonctionnera pas.")
-    # Simulation de la fonction core.analyse pour permettre à l'UI de fonctionner
-    class MockPCA:
-        def __init__(self, n_features_actual, n_components_to_simulate):
-            if n_features_actual > 0 and n_components_to_simulate > 0:
-                sim_components_t = np.random.rand(n_features_actual, n_components_to_simulate) 
-                if sim_components_t.size > 0: 
-                    sim_components_t = sim_components_t / np.linalg.norm(sim_components_t, axis=0, keepdims=True)
-                self.components_ = sim_components_t.T 
-                
-                sim_explained_variance = np.sort(np.random.rand(n_components_to_simulate))[::-1]
-                if sim_explained_variance.sum() > 0:
-                    sim_explained_variance = (sim_explained_variance / sim_explained_variance.sum()) * n_components_to_simulate * 0.7 
-                else: 
-                    sim_explained_variance = np.zeros(n_components_to_simulate)
-                self.explained_variance_ = sim_explained_variance
-            else:
+# Définition de MockCoreModule au niveau supérieur pour qu'elle soit toujours accessible
+class MockCoreModule:
+    def analyse(self, sub_df_prepared, n_clusters_unused):
+        # L'ACP et le clustering associé ne sont plus effectués.
+        print("MockCoreModule.analyse appelée, mais l'ACP est désactivée. Retour de structures vides.")
+        idx = sub_df_prepared.index if hasattr(sub_df_prepared, 'index') else pd.Index([])
+        labels_sim = np.array([])
+        if len(idx) > 0: # Simuler des labels si des données d'entrée existent
+             labels_sim = np.zeros(len(idx), dtype=int)
+
+        class MockPCAObj: # Objet PCA simulé minimaliste
+            def __init__(self):
                 self.components_ = np.array([])
                 self.explained_variance_ = np.array([])
-
-    def mock_analyse(sub_df_prepared_for_core, n_clusters):
-        n_samples = len(sub_df_prepared_for_core)
+        pca_obj_sim = MockPCAObj()
+        coords_df_sim = pd.DataFrame(index=idx)
+        n_samples_sim = len(idx)
+        # Calculer n_features_sim en s'assurant que sub_df_prepared a au moins une colonne (pour 'Espece')
+        n_features_sim = sub_df_prepared.shape[1] - 1 if sub_df_prepared.shape[1] > 1 else 0
         
-        if n_samples == 0 or sub_df_prepared_for_core.shape[1] <= 1: # Moins de 2 colonnes (Espece + au moins 1 trait)
-            mock_pca_obj = MockPCA(n_features_actual=0, n_components_to_simulate=0)
-            # X_scaled_data n'est plus utilisé par app.py, mais on le retourne pour la compatibilité de la signature
-            return np.array([]), mock_pca_obj, pd.DataFrame(index=sub_df_prepared_for_core.index), np.array([]).reshape(0,1)
-
-        numeric_cols_for_pca_df = sub_df_prepared_for_core.iloc[:, 1:] # Exclure la colonne 'Espece'
-        n_features = numeric_cols_for_pca_df.shape[1]
-
-        if n_features == 0: # Aucune colonne numérique pour l'ACP
-            mock_pca_obj = MockPCA(n_features_actual=0, n_components_to_simulate=0)
-            return np.array([]), mock_pca_obj, pd.DataFrame(index=sub_df_prepared_for_core.index), np.array([]).reshape(0,1)
-
-        n_pcs_to_simulate_coords = min(2, n_features) # Simuler au plus 2 PCs pour les coordonnées
-        coords_array = np.random.rand(n_samples, n_pcs_to_simulate_coords) * 10
-        pc_cols = [f"PC{i+1}" for i in range(coords_array.shape[1])]
-        coords_df = pd.DataFrame(coords_array, columns=pc_cols, index=sub_df_prepared_for_core.index)
-
-        labels = np.array([])
-        if n_samples > 0 and n_clusters > 0:
-            if n_samples < n_clusters : 
-                labels = np.arange(n_samples) # Chaque échantillon est son propre cluster
-            else:
-                labels = np.random.randint(0, n_clusters, n_samples)
-        
-        # X_scaled (pour dendrogramme) n'est plus utilisé par app.py
-        # On le simule quand même pour la compatibilité de la signature de la fonction mock_analyse
-        X_scaled_sim = np.array([]).reshape(n_samples, 0) 
-        if not numeric_cols_for_pca_df.empty:
-            X_scaled_temp_sim = (numeric_cols_for_pca_df - numeric_cols_for_pca_df.mean()) / numeric_cols_for_pca_df.std()
-            X_scaled_sim = X_scaled_temp_sim.fillna(0).values 
-        elif n_samples > 0 : # Si pas de traits numériques mais des échantillons, simuler avec une colonne
-             X_scaled_sim = np.random.rand(n_samples, 1) 
-        if X_scaled_sim.ndim == 1 and n_samples > 0 : # Assurer 2D si 1D
-            X_scaled_sim = X_scaled_sim.reshape(-1,1)
-        elif X_scaled_sim.size == 0 and n_samples == 0: # Cas où il n'y a aucun échantillon
-             X_scaled_sim = np.array([]).reshape(0,n_features if n_features > 0 else 1)
+        # S'assurer que reshape a au moins une dimension si n_samples_sim est 0
+        if n_samples_sim == 0:
+            X_scaled_sim = np.array([]).reshape(0, n_features_sim if n_features_sim > 0 else 1)
+        else:
+            X_scaled_sim = np.array([]).reshape(n_samples_sim, n_features_sim if n_features_sim > 0 else 1)
+            if n_features_sim == 0 and n_samples_sim > 0 : # Si pas de traits numériques mais des échantillons
+                 X_scaled_sim = np.random.rand(n_samples_sim, 1)
 
 
-        mock_pca_obj = MockPCA(n_features_actual=n_features, n_components_to_simulate=n_pcs_to_simulate_coords)
-        
-        # Assurer que coords_df a autant de colonnes que pca_obj.components_ (qui est n_pcs_to_simulate_coords)
-        if mock_pca_obj.components_.shape[0] < coords_df.shape[1]:
-            coords_df = coords_df.iloc[:, :mock_pca_obj.components_.shape[0]]
-            new_pc_cols = [f"PC{i+1}" for i in range(mock_pca_obj.components_.shape[0])]
-            coords_df.columns = new_pc_cols
-        
-        return labels, mock_pca_obj, coords_df, X_scaled_sim # X_scaled_sim est retourné mais non utilisé
+        return labels_sim, pca_obj_sim, coords_df_sim, X_scaled_sim
 
-    core = type('CoreModule', (object,), {'analyse': mock_analyse, 'read_reference': lambda fp: pd.DataFrame()})
+    def read_reference(self, fp):
+        st.warning(f"Simulation du chargement de '{fp}' via MockCoreModule.read_reference.")
+        example_species = [f"Espece Alpha Mock {i}" for i in range(1, 11)] + \
+                          [f"Espece Beta Mock {i}" for i in range(1, 11)] + \
+                          [f"Espece Gamma Mock {i}" for i in range(1, 11)]
+        data = pd.DataFrame({
+            'Espece': example_species,
+            'Trait_Num_1': np.random.rand(30) * 10,
+            'Trait_Num_2': np.random.randint(1, 100, 30),
+            'Trait_Cat_1': np.random.choice(['X', 'Y', 'Z'], 30),
+            'Humidité_édaphique': np.random.rand(30) * 5 + 1,
+            'Matière_organique': np.random.rand(30) * 10,
+            'Lumière': np.random.rand(30) * 1000,
+            'CC Rhoméo': np.random.randint(0, 5, 30) # Ajout de la nouvelle variable simulée
+        })
+        data.loc[len(data)] = ['Rhamnus pumila Mock', 5.0, 50, 'X', 3, 5, 500, 1]
+        data.loc[len(data)] = ['Vulpia sp. Mock', 2.0, 20, 'Y', 2, 2, 800, 3]
+        return data
+
+_real_core_imported = False
+_core_module_usable = False
+try:
+    import core as actual_core_module # Importer le module réel avec un alias
+    # Vérifier si le module importé a les fonctions nécessaires
+    if hasattr(actual_core_module, "read_reference") and hasattr(actual_core_module, "analyse"):
+        core = actual_core_module # Assigner le module réel à la variable 'core'
+        _real_core_imported = True
+        _core_module_usable = True # Marquer que le module réel est utilisable
+        # st.success("Module 'core.py' réel chargé et utilisable.") # Message optionnel pour le débogage
+    else:
+        st.warning("Module 'core.py' trouvé mais semble incomplet (fonctions manquantes). Simulation activée.")
+        core = MockCoreModule() # Utiliser le mock si le module réel est incomplet
+except ImportError:
+    st.warning("Le module 'core.py' est introuvable. Simulation activée.")
+    core = MockCoreModule() # Utiliser le mock si l'importation échoue
 
 
 # ---------------------------------------------------------------------------- #
 # CONFIGURATION UI
 # ---------------------------------------------------------------------------- #
-st.set_page_config(page_title="PCA flore interactive", layout="wide")
-st.markdown("<h1 style='text-align: center;'>Analyse interactive des clusters botaniques</h1>", unsafe_allow_html=True)
+st.set_page_config(page_title="Analyse de Relevés Floristiques", layout="wide")
+st.markdown("<h1 style='text-align: center;'>Analyse Interactive de Relevés Floristiques et Syntaxons</h1>", unsafe_allow_html=True)
 
 st.markdown("""
 <style>
@@ -110,26 +98,35 @@ div[data-testid="stDataEditor"] td {
     font-size: 14px !important;
 }
 
-/* Style pour la première ligne du st.data_editor (noms des habitats) - CONSERVÉ POUR L'ASPECT VISUEL */
+/* Style pour la première ligne du st.data_editor (noms des habitats) */
 div[data-testid="stDataEditor"] .glideDataEditor-body .dvn-scroll-inner > div:first-child > div[data-cell^="[0,"] > div {
-    background-color: #22272f !important; /* Couleur de fond pour thème sombre */
-    color: #e1e1e1 !important;         /* Couleur de texte pour thème sombre */
+    background-color: #22272f !important; 
+    color: #e1e1e1 !important;       
     font-weight: bold !important;
 }
 /* Style pour la cellule de la première ligne en mode édition */
 div[data-testid="stDataEditor"] .glideDataEditor-body .dvn-scroll-inner > div:first-child > div[data-cell^="[0,"] > div > .gdg-input {
-    background-color: #ffffff !important; /* Fond blanc pour l'éditeur */
-    color: #000000 !important;         /* Texte noir pour l'éditeur */
-    font-weight: normal !important;     /* Poids normal pour l'éditeur */
+    background-color: #ffffff !important; 
+    color: #000000 !important;       
+    font-weight: normal !important;   
 }
 
-.habitat-select-button button {
+.habitat-select-button button, .syntaxon-select-button button { /* Ajout de .syntaxon-select-button */
     font-size: 13px !important;
     padding: 0.25rem 0.6rem !important; 
     line-height: 1.4;
     width: 100%; 
     border-radius: 0.5rem; 
+    margin-bottom: 5px; /* Ajout d'un petit espace en bas des boutons de syntaxon */
 }
+
+/* Style pour les lignes verticales entre les colonnes de syntaxons à l'Étape 3 */
+#syntaxon-display-area div[data-testid="stHorizontalBlock"] > div:not(:last-child) {
+    border-right: 2px solid red;
+    padding-right: 1rem; /* Espace pour la ligne et avant le contenu suivant */
+    margin-right: 1rem; /* Espace supplémentaire pour mieux séparer visuellement */
+}
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -143,42 +140,75 @@ LABEL_FONT_SIZE_ON_PLOTS = 15
 HOVER_SPECIES_FONT_SIZE = 15  
 HOVER_ECOLOGY_TITLE_FONT_SIZE = 14 
 HOVER_ECOLOGY_TEXT_FONT_SIZE = 13  
+CENTROID_MARKER_SIZE = 15 # Taille pour les centroïdes (cibles)
+SPECIES_MARKER_SIZE = 8   # Taille pour les espèces individuelles
+
 
 @st.cache_data
 def load_data(file_path="data_ref.csv"):
+    data_loaded = None
     try:
-        # Simuler si core.read_reference n'est pas la vraie fonction ou si core n'est pas importé
-        if not hasattr(core, "read_reference") or callable(getattr(core, "read_reference", None)) and core.read_reference.__name__ == '<lambda>': 
-            st.warning(f"Simulation du chargement de '{file_path}'. Le fichier réel n'est pas utilisé.")
-            example_species = [f"Espece Alpha {i}" for i in range(1, 11)] + \
-                              [f"Espece Beta {i}" for i in range(1, 11)] + \
-                              [f"Espece Gamma {i}" for i in range(1, 11)]
-            data = pd.DataFrame({
-                'Espece': example_species, 
-                'Trait_Num_1': np.random.rand(30) * 10,
-                'Trait_Num_2': np.random.randint(1, 100, 30),
-                'Trait_Cat_1': np.random.choice(['X', 'Y', 'Z'], 30), 
-                'Humidité_édaphique': np.random.rand(30) * 5 + 1, 
-                'Matière_organique': np.random.rand(30) * 10,
-                'Lumière': np.random.rand(30) * 1000
-            })
-            # Ajouter des espèces spécifiques pour des tests potentiels
-            data.loc[len(data)] = ['Rhamnus pumila', 5.0, 50, 'X', 3, 5, 500]
-            data.loc[len(data)] = ['Vulpia sp.', 2.0, 20, 'Y', 2, 2, 800]
-            return data
-        
-        data = core.read_reference(file_path) 
-        if data.empty:
-            st.warning(f"Le fichier de données de traits '{file_path}' est vide ou n'a pas pu être lu correctement par core.read_reference.")
-        return data
-    except FileNotFoundError:
-        st.error(f"ERREUR CRITIQUE: Fichier de données de traits '{file_path}' non trouvé. L'application ne peut pas fonctionner.")
-        return pd.DataFrame()
-    except Exception as e:
-        st.error(f"ERREUR CRITIQUE: Impossible de charger les données de traits depuis '{file_path}': {e}")
-        return pd.DataFrame()
+        if hasattr(core, "read_reference"):
+            data_loaded = core.read_reference(file_path)
+            if _core_module_usable and not isinstance(core, MockCoreModule): 
+                if data_loaded is not None and not data_loaded.empty:
+                    pass 
+                elif data_loaded is None or data_loaded.empty:
+                    st.warning(f"core.py réel a retourné des données vides pour '{file_path}'.")
+        else:
+            st.error("Erreur inattendue: la variable 'core' n'a pas de fonction 'read_reference'.")
+            raise AttributeError("'core.read_reference' non trouvée.")
 
-ref = load_data()
+        if data_loaded is None or data_loaded.empty:
+            st.warning(f"Les données de '{file_path}' sont vides ou n'ont pu être lues (même par la simulation de core). Passage à la simulation interne.")
+            raise ValueError("Données vides ou non chargées, utilisation de la simulation interne.")
+        return data_loaded
+
+    except (FileNotFoundError, ValueError, AttributeError, Exception) as e:
+        if isinstance(e, FileNotFoundError) and _core_module_usable and not isinstance(core, MockCoreModule):
+             st.error(f"ERREUR CRITIQUE (via core.py réel): Fichier de données de traits '{file_path}' non trouvé. Simulation interne activée.")
+        elif isinstance(core, MockCoreModule) and isinstance(e, FileNotFoundError) :
+             st.warning(f"MockCoreModule a tenté de lire '{file_path}'. Simulation interne activée (ceci peut être normal).")
+        elif isinstance(e, (ValueError, AttributeError)):
+             st.warning(f"Problème lors du chargement des données de traits depuis '{file_path}' ou données vides. Simulation interne activée. Détail: {e}")
+        else: 
+             st.error(f"Erreur inattendue lors du chargement de '{file_path}': {e}. Simulation interne activée.")
+
+        st.warning(f"Activation de la simulation interne pour le chargement de '{file_path}'.")
+        example_species_sim = [f"Espece Alpha (Sim interne) {i}" for i in range(1, 11)] + \
+                              [f"Espece Beta (Sim interne) {i}" for i in range(1, 11)] + \
+                              [f"Espece Gamma (Sim interne) {i}" for i in range(1, 11)]
+        data_sim = pd.DataFrame({
+            'Espece': example_species_sim,
+            'Trait_Num_1': np.random.rand(30) * 10,
+            'Trait_Num_2': np.random.randint(1, 100, 30),
+            'Trait_Cat_1': np.random.choice(['X', 'Y', 'Z'], 30),
+            'Humidité_édaphique': np.random.rand(30) * 5 + 1,
+            'Matière_organique': np.random.rand(30) * 10,
+            'Lumière': np.random.rand(30) * 1000,
+            'CC Rhoméo': np.random.randint(0,5,30) # Ajout de la nouvelle variable simulée
+        })
+        data_sim.loc[len(data_sim)] = ['Rhamnus pumila (Sim interne)', 5.0, 50, 'X', 3, 5, 500, 2]
+        data_sim.loc[len(data_sim)] = ['Vulpia sp. (Sim interne)', 2.0, 20, 'Y', 2, 2, 800, 4]
+        
+        if data_sim.empty: 
+            st.error("La simulation interne des données de traits a également échoué. L'application risque de ne pas fonctionner.")
+            return pd.DataFrame() 
+        st.success("Données de référence chargées via simulation interne.")
+        return data_sim
+
+ref_original = load_data()
+ref = ref_original.copy() # Travailler sur une copie pour éviter de modifier le cache directement
+
+# Renommer 'CC Rhoméo' en 'Perturbation CC' si la colonne existe
+if 'CC Rhoméo' in ref.columns:
+    ref.rename(columns={'CC Rhoméo': 'Perturbation CC'}, inplace=True)
+    # Essayer de convertir en numérique, les erreurs deviendront NaN
+    ref['Perturbation CC'] = pd.to_numeric(ref['Perturbation CC'], errors='coerce')
+    st.success("La variable 'CC Rhoméo' a été chargée et renommée en 'Perturbation CC'.")
+elif 'Perturbation CC' not in ref.columns: # Si 'CC Rhoméo' n'est pas là et 'Perturbation CC' non plus
+    st.warning("La variable 'CC Rhoméo' (ou 'Perturbation CC') n'a pas été trouvée dans les données de référence.")
+
 
 ref_binom_series = pd.Series(dtype='str')
 if not ref.empty and 'Espece' in ref.columns:
@@ -186,16 +216,15 @@ if not ref.empty and 'Espece' in ref.columns:
         ref["Espece"]
         .astype(str) 
         .str.split()
-        .str[:2] # Prend les deux premiers mots (Genre et espèce)
+        .str[:2] 
         .str.join(" ")
-        .str.lower() # Convertit en minuscules pour la comparaison
+        .str.lower() 
     )
 else:
     if ref.empty:
-        st.warning("Le DataFrame de référence 'ref' est vide. Impossible de créer 'ref_binom_series'.")
+        st.warning("Le DataFrame de référence 'ref' est vide après chargement/simulation. Impossible de créer 'ref_binom_series'.")
     elif 'Espece' not in ref.columns:
-        st.warning("La colonne 'Espece' est manquante dans le DataFrame de référence 'ref'. Impossible de créer 'ref_binom_series'.")
-
+        st.warning("La colonne 'Espece' est manquante dans le DataFrame de référence 'ref' (même après simulation si applicable). Impossible de créer 'ref_binom_series'.")
 
 # ---------------------------------------------------------------------------- #
 # FONCTION UTILITAIRE POUR FORMATER L'ÉCOLOGIE
@@ -213,1026 +242,703 @@ def format_ecology_for_hover(text, line_width_chars=65):
 def load_ecology_data(file_path="data_ecologie_espece.csv"):
     try:
         eco_data = pd.read_csv(
-            file_path,
-            sep=';',
-            header=None, # Pas de ligne d'en-tête dans le fichier
-            usecols=[0, 1], # Utiliser seulement les deux premières colonnes
-            names=['Espece', 'Description_Ecologie'], # Nommer les colonnes
-            encoding='utf-8-sig', # Gérer le BOM (Byte Order Mark)
-            keep_default_na=False, # Ne pas interpréter 'NA' comme NaN
-            na_values=[''] # Interpréter les chaînes vides comme NaN
-        )
-        eco_data = eco_data.dropna(subset=['Espece']) # Supprimer les lignes où 'Espece' est NaN
-        eco_data['Espece'] = eco_data['Espece'].astype(str).str.strip() # Nettoyer les noms d'espèces
-        eco_data = eco_data[eco_data['Espece'] != ""] # Supprimer les espèces vides après nettoyage
-
+            file_path, sep=';', header=None, usecols=[0, 1], 
+            names=['Espece', 'Description_Ecologie'], encoding='utf-8-sig', 
+            keep_default_na=False, na_values=[''] )
+        eco_data = eco_data.dropna(subset=['Espece']) 
+        eco_data['Espece'] = eco_data['Espece'].astype(str).str.strip() 
+        eco_data = eco_data[eco_data['Espece'] != ""] 
         if eco_data.empty:
             st.warning(f"Le fichier écologique '{file_path}' est vide ou ne contient aucune donnée d'espèce valide.")
             return pd.DataFrame(columns=['Description_Ecologie']).set_index(pd.Index([], name='Espece_norm'))
-
-        # Normaliser les noms d'espèces pour la jointure (genre + espèce, minuscule)
-        eco_data['Espece_norm'] = (
-            eco_data['Espece']
-            .str.split()
-            .str[:2]
-            .str.join(" ")
-            .str.lower()
-        )
-        eco_data = eco_data.drop_duplicates(subset=['Espece_norm'], keep='first') # Garder la première occurrence en cas de doublons normalisés
-        eco_data = eco_data.set_index('Espece_norm') # Définir l'index sur les noms normalisés
-        return eco_data[["Description_Ecologie"]] # Retourner seulement la description
-    
+        eco_data['Espece_norm'] = (eco_data['Espece'].str.split().str[:2].str.join(" ").str.lower())
+        eco_data = eco_data.drop_duplicates(subset=['Espece_norm'], keep='first') 
+        eco_data = eco_data.set_index('Espece_norm') 
+        return eco_data[["Description_Ecologie"]] 
     except FileNotFoundError:
         print(f"AVERTISSEMENT: Fichier de données écologiques '{file_path}' non trouvé.")
         st.toast(f"Fichier écologique '{file_path}' non trouvé.", icon="⚠️")
         return pd.DataFrame(columns=['Description_Ecologie']).set_index(pd.Index([], name='Espece_norm'))
-    except pd.errors.EmptyDataError: # Si le fichier est complètement vide
+    except pd.errors.EmptyDataError: 
         st.warning(f"Le fichier écologique '{file_path}' est vide.")
         return pd.DataFrame(columns=['Description_Ecologie']).set_index(pd.Index([], name='Espece_norm'))
-    except ValueError as ve: # Problèmes de parsing CSV liés aux types/valeurs
+    except ValueError as ve: 
         print(f"AVERTISSEMENT: Erreur de valeur lors de la lecture du fichier '{file_path}'. Détails: {ve}.")
         st.toast(f"Erreur format fichier écologique '{file_path}'.", icon="🔥")
         return pd.DataFrame(columns=['Description_Ecologie']).set_index(pd.Index([], name='Espece_norm'))
-    except Exception as e: # Autres erreurs
+    except Exception as e: 
         print(f"AVERTISSEMENT: Impossible de charger les données écologiques depuis '{file_path}': {e}.")
         st.toast(f"Erreur chargement fichier écologique.", icon=" ")
         return pd.DataFrame(columns=['Description_Ecologie']).set_index(pd.Index([], name='Espece_norm'))
-
 ecology_df = load_ecology_data()
 
-
 # ---------------------------------------------------------------------------- #
-# FONCTION UTILITAIRE POUR NORMALISER LES NOMS D'ESPECES (pour data_villaret)
+# FONCTION UTILITAIRE POUR NORMALISER LES NOMS D'ESPECES
 # ---------------------------------------------------------------------------- #
-def normalize_species_name_for_villaret(species_name):
-    """Normalise un nom d'espèce en prenant les deux premiers mots et en convertissant en minuscules."""
-    if pd.isna(species_name) or str(species_name).strip() == "":
-        return None
+def normalize_species_name(species_name): 
+    if pd.isna(species_name) or str(species_name).strip() == "": return None
     return " ".join(str(species_name).strip().split()[:2]).lower()
 
 # ---------------------------------------------------------------------------- #
-# CHARGEMENT DES DONNÉES DES SYNTAXONS (POUR CO-OCCURRENCE)
+# CHARGEMENT DES DONNÉES DES SYNTAXONS
 # ---------------------------------------------------------------------------- #
 @st.cache_data
 def load_syntaxon_data(file_path="data_villaret.csv"):
-    """Charge et prétraite les données des syntaxons à partir d'un fichier CSV."""
     try:
-        # Lire le CSV ; pas d'en-tête, séparateur point-virgule
         df = pd.read_csv(file_path, sep=';', header=None, encoding='utf-8-sig', keep_default_na=False, na_values=[''])
         if df.empty:
             st.warning(f"Le fichier des syntaxons '{file_path}' est vide.")
             return []
-
+        
         processed_syntaxons = []
-        # Itérer sur chaque ligne (chaque syntaxon)
         for index, row in df.iterrows():
-            # Colonne 0: ID du syntaxon, Colonne 1: Nom du syntaxon
+            if len(row) < 2: 
+                continue
+
             syntaxon_id = str(row.iloc[0]).strip()
-            syntaxon_name = str(row.iloc[1]).strip()
-            
+            syntaxon_name_latin = str(row.iloc[1]).strip()
+            syntaxon_description = "Description non disponible."
+            species_start_index = 2 
+
+            if len(row) > 2: 
+                description_candidate = str(row.iloc[2]).strip()
+                if len(description_candidate.split()) > 3 or len(description_candidate) > 50 : 
+                    syntaxon_description = description_candidate
+                    species_start_index = 3
+                elif not any(char.isdigit() for char in description_candidate) and normalize_species_name(description_candidate) is None : 
+                    syntaxon_description = description_candidate
+                    species_start_index = 3
+
+
             species_in_row_set = set()
-            # Les espèces commencent à partir de la 3ème colonne (index 2)
-            for species_cell_value in row.iloc[2:]:
-                normalized_species = normalize_species_name_for_villaret(species_cell_value)
-                if normalized_species: # Ajouter seulement si le nom normalisé est valide
-                    species_in_row_set.add(normalized_species)
+            if len(row) > species_start_index: 
+                for species_cell_value in row.iloc[species_start_index:]:
+                    normalized_species = normalize_species_name(species_cell_value)
+                    if normalized_species:
+                        species_in_row_set.add(normalized_species)
             
-            # Ajouter le syntaxon seulement s'il a un ID, un nom, et au moins une espèce caractéristique
-            if syntaxon_id and syntaxon_name and species_in_row_set:
+            if syntaxon_id and syntaxon_name_latin: 
                 processed_syntaxons.append({
-                    'id': syntaxon_id,
-                    'name': syntaxon_name,
-                    'species_set': species_in_row_set # Ensemble des espèces normalisées pour ce syntaxon
+                    'id': syntaxon_id, 
+                    'name_latin': syntaxon_name_latin, 
+                    'description': syntaxon_description if syntaxon_description else "Description non disponible.",
+                    'species_set': species_in_row_set
                 })
         
         if not processed_syntaxons:
-            st.warning(f"Aucun syntaxon valide (avec ID, nom et espèces) n'a été trouvé dans '{file_path}'.")
+            st.warning(f"Aucun syntaxon (avec ID et Nom) n'a été trouvé dans '{file_path}'.")
         return processed_syntaxons
-        
     except FileNotFoundError:
-        st.error(f"ERREUR CRITIQUE: Fichier des syntaxons '{file_path}' non trouvé. L'analyse de co-occurrence ne pourra pas être effectuée.")
+        st.error(f"ERREUR CRITIQUE: Fichier des syntaxons '{file_path}' non trouvé.")
         return []
-    except pd.errors.EmptyDataError: # Si le fichier CSV est complètement vide
+    except pd.errors.EmptyDataError: 
         st.warning(f"Le fichier des syntaxons '{file_path}' est vide (EmptyDataError).")
         return []
-    except Exception as e: # Capturer d'autres erreurs potentielles
+    except Exception as e: 
         st.error(f"ERREUR CRITIQUE: Impossible de charger les données des syntaxons depuis '{file_path}': {e}")
         return []
-
-syntaxon_data_list = load_syntaxon_data() # Charger les données ici pour qu'elles soient disponibles globalement
-
+syntaxon_data_list = load_syntaxon_data()
 
 # ---------------------------------------------------------------------------- #
 # INITIALISATION DES ETATS DE SESSION
 # ---------------------------------------------------------------------------- #
 default_session_states = {
-    'x_axis_trait_interactive': None,
-    'y_axis_trait_interactive': None,
-    'run_main_analysis_once': False, 
-    'vip_data_df_interactive': pd.DataFrame(),
-    'vip_data_df_interactive_snapshot_for_comparison': pd.DataFrame(), 
-    'sub': pd.DataFrame(), 
-    'pdf': pd.DataFrame(), 
-    'numeric_trait_names_for_interactive_plot': [],
-    'selected_habitats_indices': [], 
-    'previous_num_cols': 0, # Pour suivre les changements dans le nombre de colonnes de l'éditeur de relevés
-    'analysis_has_run_for_current_selection': False, # Pour éviter de relancer l'analyse si rien n'a changé
-    'n_clusters_slider_main_value': 3 # Valeur par défaut pour le slider du nombre de clusters
+    'x_axis_trait_interactive': None, 'y_axis_trait_interactive': None,
+    'run_main_processing_once': False, 'trait_exploration_df': pd.DataFrame(), 
+    'trait_exploration_df_snapshot': pd.DataFrame(), 'sub': pd.DataFrame(), 
+    'numeric_trait_names_for_interactive_plot': [], 'selected_habitats_indices': [], 
+    'previous_num_cols': 0, 'processing_has_run_for_current_selection': False, 
+    'top_matching_syntaxons': [], 'selected_syntaxon_ids': [] 
 }
-
 for key, value in default_session_states.items():
-    if key not in st.session_state:
-        st.session_state[key] = value
+    if key not in st.session_state: st.session_state[key] = value
 
-# Initialisation du DataFrame des relevés avec des placeholders s'il n'existe pas
 if 'releves_df' not in st.session_state or not isinstance(st.session_state.releves_df, pd.DataFrame):
-    num_placeholder_cols = 15 # Nombre de colonnes de relevés par défaut
-    num_placeholder_rows_total = 11 # Nombre de lignes (1 pour nom habitat + 10 pour espèces)
-    # Créer la ligne d'en-tête (noms des habitats)
+    num_placeholder_cols = 15; num_placeholder_rows_total = 11 
     header = [f"Habitat {j+1}" for j in range(num_placeholder_cols)] 
-    # Créer les lignes de données vides pour les espèces
     placeholder_rows = [["" for _ in range(num_placeholder_cols)] for _ in range(num_placeholder_rows_total -1)]
     st.session_state.releves_df = pd.DataFrame([header] + placeholder_rows)
-    # S'assurer que les noms de colonnes sont des chaînes (important pour st.data_editor)
     st.session_state.releves_df.columns = [str(col) for col in st.session_state.releves_df.columns] 
     st.session_state.previous_num_cols = num_placeholder_cols
-
 
 # ---------------------------------------------------------------------------- #
 # ÉTAPE 1: IMPORTATION ET SÉLECTION DES RELEVÉS FLORISTIQUES
 # ---------------------------------------------------------------------------- #
-st.markdown("---") # Ligne de séparation visuelle
-st.subheader("Étape 1: Importation et Sélection des Relevés Floristiques")
-
-st.info("Copiez-collez vos données de relevés ci-dessus (Ctrl+V ou Cmd+V). La première ligne doit contenir les noms des habitats/relevés. Les lignes suivantes contiennent les espèces.")
-
-# S'assurer que les noms de colonnes sont des chaînes avant d'utiliser st.data_editor
+st.markdown("---"); st.subheader("Étape 1: Importation et Sélection des Relevés Floristiques")
+st.info("Copiez-collez vos données de relevés. La première ligne = noms d'habitats. Lignes suivantes = espèces.")
 if not all(isinstance(col, str) for col in st.session_state.releves_df.columns):
     st.session_state.releves_df.columns = [str(col) for col in st.session_state.releves_df.columns]
-
-# Éditeur de données pour les relevés floristiques
-edited_releves_df_from_editor = st.data_editor(
-    st.session_state.releves_df,
-    num_rows="dynamic", # Permettre à l'utilisateur d'ajouter/supprimer des lignes
-    use_container_width=True,
-    key="releves_data_editor_key" # Clé unique pour l'éditeur
-)
-
-# Si les données ont été modifiées dans l'éditeur
+edited_releves_df_from_editor = st.data_editor(st.session_state.releves_df, num_rows="dynamic", use_container_width=True, key="releves_data_editor_key" )
 if not edited_releves_df_from_editor.equals(st.session_state.releves_df):
-    st.session_state.releves_df = edited_releves_df_from_editor.copy() # Mettre à jour l'état de session
-    # Si le nombre de colonnes a changé, ajuster les indices sélectionnés et réinitialiser l'analyse
+    st.session_state.releves_df = edited_releves_df_from_editor.copy() 
     if len(st.session_state.releves_df.columns) != st.session_state.previous_num_cols:
         current_max_col_index = len(st.session_state.releves_df.columns) - 1
-        # Conserver uniquement les indices de colonnes sélectionnés qui sont encore valides
-        st.session_state.selected_habitats_indices = [
-            idx for idx in st.session_state.selected_habitats_indices if idx <= current_max_col_index
-        ]
-        # Si plus aucun habitat n'est sélectionné (ou si la liste est vide), réinitialiser l'état de l'analyse
+        st.session_state.selected_habitats_indices = [idx for idx in st.session_state.selected_habitats_indices if idx <= current_max_col_index]
         if not st.session_state.selected_habitats_indices: 
-            st.session_state.analysis_has_run_for_current_selection = False
-            st.session_state.run_main_analysis_once = False 
-        st.session_state.previous_num_cols = len(st.session_state.releves_df.columns) # Mettre à jour le nombre de colonnes précédent
-    st.rerun() # Relancer le script pour refléter les changements
-
+            st.session_state.processing_has_run_for_current_selection = False
+            st.session_state.run_main_processing_once = False 
+            st.session_state.selected_syntaxon_ids = [] 
+        st.session_state.previous_num_cols = len(st.session_state.releves_df.columns) 
+    st.rerun() 
 current_releves_df_for_selection = st.session_state.releves_df.copy() 
-
-# Vérifier si le DataFrame des relevés est prêt pour la sélection des habitats
-if not current_releves_df_for_selection.empty and \
-   len(current_releves_df_for_selection.columns) > 0 and \
-   len(current_releves_df_for_selection) > 0:
-    
-    # Extraire les noms des habitats de la première ligne du DataFrame
+if not current_releves_df_for_selection.empty and len(current_releves_df_for_selection.columns) > 0 and len(current_releves_df_for_selection) > 0:
     habitat_names_from_df = current_releves_df_for_selection.iloc[0].astype(str).tolist()
-    num_actual_cols = len(current_releves_df_for_selection.columns) # Nombre actuel de colonnes
-    
-    st.markdown("**Cliquez sur le nom d'un habitat ci-dessous pour le sélectionner/désélectionner pour l'analyse :**") 
-    
-    # S'assurer que les indices d'habitats sélectionnés sont valides par rapport au nombre actuel de colonnes
-    st.session_state.selected_habitats_indices = [
-        idx for idx in st.session_state.selected_habitats_indices if idx < num_actual_cols
-    ]
-
-    # Filtrer les colonnes pour ne montrer que celles avec des données d'espèces valides
+    num_actual_cols = len(current_releves_df_for_selection.columns) 
+    st.markdown("**Cliquez sur le nom d'un habitat ci-dessous pour le sélectionner/désélectionner :**") 
+    st.session_state.selected_habitats_indices = [idx for idx in st.session_state.selected_habitats_indices if idx < num_actual_cols]
     valid_habitat_buttons_info = []
     for i in range(num_actual_cols):
-        # Vérifier si la colonne (à partir de la deuxième ligne) contient des données d'espèces
-        # (non-NA, non-vide après strip)
         species_in_col = current_releves_df_for_selection.iloc[1:, i].dropna().astype(str).str.strip().replace('', np.nan).dropna()
-        if not species_in_col.empty: # Si la colonne contient au moins une espèce
-            # Utiliser le nom de l'habitat de la première ligne, ou un nom par défaut si vide/NA
+        if not species_in_col.empty: 
             habitat_name_for_button = habitat_names_from_df[i] if pd.notna(habitat_names_from_df[i]) and str(habitat_names_from_df[i]).strip() != "" else f"Relevé {i+1}"
             valid_habitat_buttons_info.append({'index': i, 'name': habitat_name_for_button})
-
-    if valid_habitat_buttons_info: # Si au moins un habitat valide avec des espèces existe
+    if valid_habitat_buttons_info: 
         num_buttons_to_show = len(valid_habitat_buttons_info)
-        button_cols_layout = st.columns(num_buttons_to_show) # Créer des colonnes pour les boutons
-        
-        # Créer un bouton pour chaque habitat valide
+        button_cols_layout = st.columns(num_buttons_to_show) 
         for k, habitat_info in enumerate(valid_habitat_buttons_info):
-            col_idx = habitat_info['index'] # Index original de la colonne dans le DataFrame
-            habitat_name_display = habitat_info['name'] # Nom à afficher sur le bouton
-            is_selected = (col_idx in st.session_state.selected_habitats_indices) # Statut de sélection
-            
-            button_type = "primary" if is_selected else "secondary" # Style du bouton
-            button_key = f"habitat_select_button_{col_idx}" # Clé unique pour le bouton
-
-            with button_cols_layout[k]: # Placer le bouton dans sa colonne
+            col_idx = habitat_info['index']; habitat_name_display = habitat_info['name'] 
+            is_selected = (col_idx in st.session_state.selected_habitats_indices) 
+            button_type = "primary" if is_selected else "secondary"; button_key = f"habitat_select_button_{col_idx}" 
+            with button_cols_layout[k]: 
                 st.markdown(f'<div class="habitat-select-button">', unsafe_allow_html=True)
                 if st.button(habitat_name_display, key=button_key, type=button_type, use_container_width=True):
-                    if is_selected:
-                        st.session_state.selected_habitats_indices.remove(col_idx) # Désélectionner
-                    else:
-                        st.session_state.selected_habitats_indices.append(col_idx) # Sélectionner
-                    # Réinitialiser l'état de l'analyse car la sélection a changé
-                    st.session_state.run_main_analysis_once = False 
-                    st.session_state.analysis_has_run_for_current_selection = False 
-                    st.rerun() # Relancer pour mettre à jour l'UI et potentiellement l'analyse
+                    if is_selected: st.session_state.selected_habitats_indices.remove(col_idx) 
+                    else: st.session_state.selected_habitats_indices.append(col_idx) 
+                    st.session_state.run_main_processing_once = False 
+                    st.session_state.processing_has_run_for_current_selection = False 
+                    st.session_state.selected_syntaxon_ids = [] 
+                    st.rerun() 
                 st.markdown('</div>', unsafe_allow_html=True)
-    elif num_actual_cols > 0 : # Il y a des colonnes, mais aucune avec des données d'espèces
-        st.info("Aucune colonne ne contient de données d'espèces pour la sélection. Veuillez ajouter des espèces sous les noms d'habitats.")
-    else: # Aucune colonne du tout
-        st.info("Ajoutez des colonnes au tableau pour pouvoir sélectionner des relevés.")
-else:
-    st.warning("Le tableau de données est vide ou ne contient pas de colonnes pour la sélection.")
+    elif num_actual_cols > 0 : st.info("Aucune colonne ne contient de données d'espèces pour la sélection.")
+    else: st.info("Ajoutez des colonnes au tableau pour pouvoir sélectionner des relevés.")
+else: st.warning("Le tableau de données est vide ou ne contient pas de colonnes.")
 
+# Condition pour lancer le traitement principal
+if st.session_state.selected_habitats_indices and not ref.empty and not st.session_state.get('processing_has_run_for_current_selection', False): 
+    st.session_state.run_main_processing_once = True 
+    st.session_state.processing_has_run_for_current_selection = True 
+    st.session_state.sub = pd.DataFrame(); st.session_state.trait_exploration_df = pd.DataFrame()
+    st.session_state.numeric_trait_names_for_interactive_plot = []; st.session_state.top_matching_syntaxons = []
 
-# Initialisation des figures (évite les erreurs si elles ne sont pas créées)
-fig_pca = None 
-# fig_dend = None # SUPPRIMÉ: Dendrogramme retiré
-
-# Condition pour lancer l'analyse principale
-if st.session_state.selected_habitats_indices and \
-   not ref.empty and \
-   not st.session_state.get('analysis_has_run_for_current_selection', False): # Si des habitats sont sélectionnés, ref est chargé, et l'analyse n'a pas encore tourné pour cette sélection
-
-    st.session_state.run_main_analysis_once = True # Indiquer que l'analyse va être (ou a été) lancée
-    st.session_state.analysis_has_run_for_current_selection = True # Marquer que l'analyse pour cette sélection est faite
-
-    # Réinitialiser les DataFrames de résultats de session
-    st.session_state.sub = pd.DataFrame() # DataFrame des espèces sélectionnées avec leurs traits
-    st.session_state.pdf = pd.DataFrame() # DataFrame des coordonnées PCA et clusters
-    st.session_state.vip_data_df_interactive = pd.DataFrame() # Pour le tableau d'exploration interactif
-    st.session_state.numeric_trait_names_for_interactive_plot = [] # Liste des traits numériques
-
-    all_species_data_for_analysis = [] # Pour stocker les données des espèces trouvées
-    species_not_found_in_ref_detailed = {} # Pour suivre les espèces non trouvées par habitat
-
+    all_species_data_for_processing = []; species_not_found_in_ref_detailed = {} 
     df_for_species_extraction = st.session_state.releves_df.copy() 
-    # Noms des habitats à partir de la première ligne du DataFrame des relevés
     habitat_names_from_header = df_for_species_extraction.iloc[0].astype(str).tolist() if not df_for_species_extraction.empty else []
-
-    # Itérer sur les indices des habitats sélectionnés par l'utilisateur
     for habitat_idx in st.session_state.selected_habitats_indices:
-        if habitat_idx < len(df_for_species_extraction.columns): # Vérifier la validité de l'index
-            # Déterminer le nom de l'habitat
+        if habitat_idx < len(df_for_species_extraction.columns): 
             habitat_name = habitat_names_from_header[habitat_idx] if habitat_idx < len(habitat_names_from_header) and pd.notna(habitat_names_from_header[habitat_idx]) and str(habitat_names_from_header[habitat_idx]).strip() != "" else f"Relevé {habitat_idx+1}"
-            # Extraire les espèces de la colonne de l'habitat (à partir de la 2ème ligne)
             species_in_col_series = df_for_species_extraction.iloc[1:, habitat_idx]
-            # Nettoyer la liste des espèces : supprimer NA, convertir en str, strip, remplacer vide par NA, puis supprimer NA
             species_raw_in_current_habitat = species_in_col_series.dropna().astype(str).str.strip().replace('', np.nan).dropna().tolist()
-            
-            species_not_found_in_ref_detailed[habitat_name] = [] # Initialiser la liste des non-trouvées pour cet habitat
-
-            if not species_raw_in_current_habitat: # Si aucune espèce n'est listée pour cet habitat
-                st.warning(f"Aucune espèce listée dans l'habitat sélectionné : {habitat_name}")
-                continue # Passer à l'habitat suivant
-
-            # Pour chaque espèce brute extraite de l'habitat
+            species_not_found_in_ref_detailed[habitat_name] = [] 
+            if not species_raw_in_current_habitat: st.warning(f"Aucune espèce listée dans l'habitat sélectionné : {habitat_name}"); continue 
             for raw_species_name in species_raw_in_current_habitat:
-                if not raw_species_name or len(raw_species_name.split()) == 0: # Ignorer si nom vide ou invalide
-                    continue
-                
-                # Normaliser le nom de l'espèce (genre + espèce, minuscule) pour la comparaison
-                binom_species_name = " ".join(raw_species_name.split()[:2]).lower()
-                
-                if not ref_binom_series.empty: # Si la série de noms binomiaux de référence existe
-                    # Chercher une correspondance dans la base de référence
+                if not raw_species_name or len(raw_species_name.split()) == 0: continue
+                binom_species_name = normalize_species_name(raw_species_name) 
+                if not ref_binom_series.empty: 
                     match_in_ref = ref_binom_series[ref_binom_series == binom_species_name]
-                    if not match_in_ref.empty: # Si une correspondance est trouvée
-                        ref_idx = match_in_ref.index[0] # Index de l'espèce dans le DataFrame 'ref'
-                        trait_data = ref.loc[ref_idx].to_dict() # Obtenir les données de traits
-                        trait_data['Source_Habitat'] = habitat_name # Ajouter l'habitat d'origine
-                        trait_data['Espece_Ref_Original'] = ref.loc[ref_idx, 'Espece'] # Nom original de référence
-                        trait_data['Espece_User_Input_Raw'] = raw_species_name # Nom entré par l'utilisateur
-                        all_species_data_for_analysis.append(trait_data)
-                    else: # Si non trouvée dans la référence
-                        species_not_found_in_ref_detailed[habitat_name].append(raw_species_name)
-                else: # Si ref_binom_series est vide (ne devrait pas arriver si 'ref' est chargé)
-                     species_not_found_in_ref_detailed[habitat_name].append(raw_species_name)
-
-    if not all_species_data_for_analysis: # Si aucune espèce correspondante n'a été trouvée au total
-        st.error("Aucune espèce valide correspondante aux traits n'a été trouvée dans les relevés sélectionnés. Vérifiez vos données et sélections.")
-        st.session_state.run_main_analysis_once = False 
-        st.session_state.analysis_has_run_for_current_selection = False 
-    else: # Si des espèces ont été trouvées et leurs traits récupérés
-        st.session_state.sub = pd.DataFrame(all_species_data_for_analysis) # Créer le DataFrame 'sub'
-        st.session_state.sub.reset_index(drop=True, inplace=True) # Réinitialiser l'index
-
-        # Afficher les avertissements pour les espèces non trouvées
+                    if not match_in_ref.empty: 
+                        ref_idx = match_in_ref.index[0]
+                        trait_data = ref.loc[ref_idx].to_dict() 
+                        trait_data['Source_Habitat'] = habitat_name
+                        trait_data['Espece_Ref_Original'] = ref_original.loc[ref_idx, 'Espece']
+                        trait_data['Espece_User_Input_Raw'] = raw_species_name 
+                        normalized_ref_for_eco = normalize_species_name(trait_data['Espece_Ref_Original'])
+                        if not ecology_df.empty and normalized_ref_for_eco in ecology_df.index:
+                             trait_data['Ecologie_raw'] = ecology_df.loc[normalized_ref_for_eco, 'Description_Ecologie']
+                        else: trait_data['Ecologie_raw'] = None 
+                        trait_data['Ecologie'] = format_ecology_for_hover(trait_data['Ecologie_raw'])
+                        all_species_data_for_processing.append(trait_data)
+                    else: species_not_found_in_ref_detailed[habitat_name].append(raw_species_name)
+                else: species_not_found_in_ref_detailed[habitat_name].append(raw_species_name)
+    if not all_species_data_for_processing: 
+        st.error("Aucune espèce valide correspondante aux traits n'a été trouvée."); st.session_state.run_main_processing_once = False; st.session_state.processing_has_run_for_current_selection = False 
+    else: 
+        st.session_state.sub = pd.DataFrame(all_species_data_for_processing); st.session_state.sub.reset_index(drop=True, inplace=True) 
         for habitat_name, not_found_list in species_not_found_in_ref_detailed.items():
-            if not_found_list:
-                st.warning(f"Espèces de '{habitat_name}' non trouvées dans la base de traits : " + ", ".join(not_found_list), icon="⚠️")
-
-        # Récupérer le nombre de clusters sélectionné par l'utilisateur
-        n_clusters_selected_main = st.session_state.get('n_clusters_slider_main_value', 3) 
-
-        # Vérifications avant de lancer core.analyse
+            if not_found_list: st.warning(f"Espèces de '{habitat_name}' non trouvées: " + ", ".join(not_found_list), icon="⚠️")
         if st.session_state.sub.empty: 
-            st.error("Aucune des espèces sélectionnées n'a été trouvée dans la base de traits. L'analyse ne peut continuer.")
-            st.session_state.run_main_analysis_once = False; st.session_state.analysis_has_run_for_current_selection = False;
-        elif st.session_state.sub.shape[0] < n_clusters_selected_main and n_clusters_selected_main > 0 :
-            st.error(f"Nombre total d'instances d'espèces trouvées ({st.session_state.sub.shape[0]}) < clusters demandés ({n_clusters_selected_main}). Ajustez le nombre de clusters ou vérifiez les espèces.");
-            st.session_state.run_main_analysis_once = False; st.session_state.analysis_has_run_for_current_selection = False;
-        elif st.session_state.sub.shape[0] < 2: # Besoin d'au moins 2 échantillons pour l'ACP
-            st.error(f"Au moins 2 instances d'espèces (total sur les habitats) sont nécessaires pour l'analyse. {st.session_state.sub.shape[0]} trouvée(s).");
-            st.session_state.run_main_analysis_once = False; st.session_state.analysis_has_run_for_current_selection = False;
-        else: # Si tout est OK, procéder à l'analyse
+            st.error("Aucune espèce avec traits. Traitement impossible."); st.session_state.run_main_processing_once = False; st.session_state.processing_has_run_for_current_selection = False;
+        elif st.session_state.sub.shape[0] < 1: 
+            st.error(f"Au moins 1 instance d'espèce nécessaire. {st.session_state.sub.shape[0]} trouvée(s)."); st.session_state.run_main_processing_once = False; st.session_state.processing_has_run_for_current_selection = False;
+        else:
             try:
-                if ref.empty: # Double vérification, bien que déjà gérée plus haut
-                    st.error("Le DataFrame de référence 'ref' est vide. Impossible de déterminer les traits numériques.")
-                    st.session_state.run_main_analysis_once = False
-                    st.session_state.analysis_has_run_for_current_selection = False
-                    raise ValueError("DataFrame 'ref' vide, impossible de préparer les données pour core.analyse.")
-
-                # Identifier les traits numériques à partir du DataFrame de référence 'ref'
-                numeric_trait_names_from_ref = ref.select_dtypes(include=np.number).columns.tolist()
-                df_for_core_preparation = st.session_state.sub.copy() # Copie de 'sub' pour la préparation
-
-                # Déterminer la colonne d'identification de l'espèce pour core.analyse
-                if 'Espece_Ref_Original' in df_for_core_preparation.columns:
-                    df_for_core_preparation['Espece_ID_Core'] = df_for_core_preparation['Espece_Ref_Original']
-                elif 'Espece' in df_for_core_preparation.columns: 
-                    df_for_core_preparation['Espece_ID_Core'] = df_for_core_preparation['Espece']
-                else: # Si aucune colonne d'identification n'est trouvée
-                    st.error("Colonne d'identification 'Espece' ou 'Espece_Ref_Original' manquante pour l'analyse.")
-                    raise ValueError("Identifiant 'Espece' manquant pour core.analyse.")
-
-                # Sélectionner les traits numériques qui sont effectivement présents dans 'sub' (et donc dans df_for_core_preparation)
-                actual_numeric_traits_for_pca = [
-                    trait for trait in numeric_trait_names_from_ref if trait in df_for_core_preparation.columns
-                ]
+                if ref.empty: st.error("DataFrame 'ref' vide."); st.session_state.run_main_processing_once = False; st.session_state.processing_has_run_for_current_selection = False; raise ValueError("DataFrame 'ref' vide.")
                 
-                # Préparer le DataFrame final pour l'appel à core.analyse
-                columns_for_core_call = ['Espece_ID_Core'] + actual_numeric_traits_for_pca
-                sub_for_analysis_call_prepared = df_for_core_preparation[columns_for_core_call]
-                # Renommer la colonne d'ID en 'Espece' comme attendu par core.analyse (selon la simulation)
-                sub_for_analysis_call_prepared = sub_for_analysis_call_prepared.rename(columns={'Espece_ID_Core': 'Espece'})
+                numeric_trait_names_from_ref = ref.select_dtypes(include=np.number).columns.tolist()
+                if 'Espece' in numeric_trait_names_from_ref: # Should not happen with select_dtypes(include=np.number)
+                    numeric_trait_names_from_ref.remove('Espece')
 
-                if not actual_numeric_traits_for_pca: # Si aucun trait numérique n'est disponible
-                    st.error("Aucun trait numérique disponible pour l'ACP après filtrage. L'analyse est impossible.")
-                    st.session_state.run_main_analysis_once = False
-                    st.session_state.analysis_has_run_for_current_selection = False
-                    raise ValueError("Aucun trait numérique pour l'ACP.")
+                actual_numeric_traits = [trait for trait in numeric_trait_names_from_ref if trait in st.session_state.sub.columns and pd.to_numeric(st.session_state.sub[trait], errors='coerce').notna().any()]
+                
+                if not actual_numeric_traits:
+                    st.error("Aucun trait numérique avec des données valides disponible pour l'analyse."); 
+                    st.session_state.run_main_processing_once = False; 
+                    st.session_state.processing_has_run_for_current_selection = False; 
+                    raise ValueError("Aucun trait numérique valide.")
                 else:
-                    # Appel à la fonction d'analyse (réelle ou simulée)
-                    # X_scaled_data n'est plus assigné à st.session_state.X_for_dendro
-                    labels, pca_results, coords_df_from_core, _ = core.analyse(sub_for_analysis_call_prepared, n_clusters_selected_main)
+                    st.session_state.numeric_trait_names_for_interactive_plot = actual_numeric_traits
                     
-                    # Vérifier et convertir coords_df_from_core si c'est un NumPy array
-                    if not isinstance(coords_df_from_core, pd.DataFrame):
-                        if isinstance(coords_df_from_core, np.ndarray) and \
-                           coords_df_from_core.ndim == 2 and \
-                           coords_df_from_core.shape[0] == len(sub_for_analysis_call_prepared):
-                            num_pcs = coords_df_from_core.shape[1]
-                            pc_cols = [f"PC{i+1}" for i in range(num_pcs)]
-                            coords_df = pd.DataFrame(coords_df_from_core, columns=pc_cols, index=sub_for_analysis_call_prepared.index)
-                            st.info("Les coordonnées PCA (coords_df) ont été converties de NumPy array en DataFrame.")
-                        else:
-                            st.error("Format des coordonnées PCA (coords_df) inattendu après retour de core.analyse. Doit être un DataFrame ou un NumPy array 2D compatible.")
-                            st.session_state.run_main_analysis_once = False
-                            st.session_state.analysis_has_run_for_current_selection = False
-                            raise TypeError("Format coords_df incorrect depuis core.analyse.")
-                    else: 
-                        coords_df = coords_df_from_core 
+                    # Calcul de la contribution à la variance
+                    traits_for_variance_analysis = st.session_state.sub[actual_numeric_traits].copy()
+                    # Convertir en numérique et imputer les NaNs pour le scaling/variance
+                    for col in actual_numeric_traits:
+                        traits_for_variance_analysis[col] = pd.to_numeric(traits_for_variance_analysis[col], errors='coerce')
+                    traits_for_variance_analysis = traits_for_variance_analysis.fillna(traits_for_variance_analysis.mean()) # Imputation simple par la moyenne
+
+                    trait_contributions = []
+                    if not traits_for_variance_analysis.empty and traits_for_variance_analysis.shape[1] > 0:
+                        # S'assurer qu'il reste des colonnes après le dropna potentiel ou si une colonne est entièrement NaN avant imputation
+                        valid_cols_for_scaling = traits_for_variance_analysis.dropna(axis=1, how='all').columns
+                        if not valid_cols_for_scaling.empty :
+                            scaler = StandardScaler()
+                            scaled_traits = scaler.fit_transform(traits_for_variance_analysis[valid_cols_for_scaling])
+                            scaled_traits_df = pd.DataFrame(scaled_traits, columns=valid_cols_for_scaling)
+                            variances = scaled_traits_df.var()
+                            total_variance = variances.sum()
+                            if total_variance > 0:
+                                for trait in actual_numeric_traits:
+                                    if trait in variances:
+                                        contribution = (variances[trait] / total_variance) * 100
+                                        trait_contributions.append({"Variable": trait, "Contribution (%)": contribution})
+                                    else: # Trait initialement numérique mais devenu NaN partout ou non inclus dans valid_cols_for_scaling
+                                        trait_contributions.append({"Variable": trait, "Contribution (%)": 0.0})
+
+                            else: # total_variance est 0 (e.g. toutes les valeurs sont constantes après scaling)
+                                equal_contribution = 100.0 / len(actual_numeric_traits) if len(actual_numeric_traits) > 0 else 0
+                                for trait in actual_numeric_traits:
+                                    trait_contributions.append({"Variable": trait, "Contribution (%)": equal_contribution})
+                        else: # Aucune colonne valide pour le scaling
+                             for trait in actual_numeric_traits: trait_contributions.append({"Variable": trait, "Contribution (%)": 0.0})
+                    else: # Pas de données pour l'analyse de variance
+                        for trait in actual_numeric_traits: trait_contributions.append({"Variable": trait, "Contribution (%)": 0.0})
+
+
+                    # Trier par contribution pour la sélection par défaut
+                    trait_contributions_sorted = sorted(trait_contributions, key=lambda x: x["Contribution (%)"], reverse=True)
                     
-                    # Vérifier la cohérence de l'index après la conversion potentielle
-                    if not coords_df.index.equals(sub_for_analysis_call_prepared.index):
-                        st.error("L'index des coordonnées PCA (coords_df) ne correspond pas aux données d'entrée après conversion/vérification. L'alignement des données a échoué.")
-                        if len(coords_df) == len(sub_for_analysis_call_prepared): 
-                            coords_df.index = sub_for_analysis_call_prepared.index # Forcer le réalignement si les longueurs correspondent
-                            st.warning("Index des coordonnées PCA (coords_df) forcé au réalignement.")
-                        else: # Si les longueurs ne correspondent pas, c'est un problème plus grave
-                            st.session_state.run_main_analysis_once = False
-                            st.session_state.analysis_has_run_for_current_selection = False
-                            # Informations de débogage
-                            print(f"coords_df length: {len(coords_df)}, sub_for_analysis_call_prepared length: {len(sub_for_analysis_call_prepared)}")
-                            print(f"coords_df index: {coords_df.index}")
-                            print(f"sub_for_analysis_call_prepared index: {sub_for_analysis_call_prepared.index}")
-                            raise ValueError("Incohérence de longueur d'index PCA persistante, impossible de réaligner.")
+                    exploration_df_data = []
+                    for item in trait_contributions_sorted:
+                        exploration_df_data.append({
+                            "Variable": item["Variable"], 
+                            "Contribution (%)": item["Contribution (%)"], 
+                            "Axe X": False, 
+                            "Axe Y": False
+                        })
+                    
+                    st.session_state.trait_exploration_df = pd.DataFrame(exploration_df_data)
 
-                    # Si l'analyse s'est bien déroulée jusqu'ici
-                    if st.session_state.run_main_analysis_once: 
-                        current_pdf = coords_df.copy() # DataFrame pour les résultats PCA
-                        if not current_pdf.empty:
-                            # Ajouter les labels de cluster (s'ils existent et correspondent en longueur)
-                            if len(labels) == len(current_pdf): current_pdf["Cluster"] = labels.astype(str)
-                            else: current_pdf["Cluster"] = np.zeros(len(current_pdf)).astype(str) if len(current_pdf) > 0 else pd.Series(dtype=str) # Fallback
-                            
-                            # Ajouter les informations d'habitat, d'espèce de référence, et d'espèce utilisateur
-                            # Utiliser .loc pour s'assurer de l'alignement correct des index
-                            current_pdf["Source_Habitat"] = st.session_state.sub.loc[current_pdf.index, "Source_Habitat"]
-                            current_pdf["Espece_Ref"] = st.session_state.sub.loc[current_pdf.index, "Espece_Ref_Original"]
-                            current_pdf["Espece_User"] = st.session_state.sub.loc[current_pdf.index, "Espece_User_Input_Raw"]
+                    default_x_init, default_y_init = None, None
+                    if len(trait_contributions_sorted) > 0:
+                        default_x_init = trait_contributions_sorted[0]["Variable"]
+                    if len(trait_contributions_sorted) > 1:
+                        default_y_init = trait_contributions_sorted[1]["Variable"]
+                    elif default_x_init: # Si un seul trait, utiliser le même pour Y
+                        default_y_init = default_x_init
+                    
+                    st.session_state.x_axis_trait_interactive = default_x_init
+                    st.session_state.y_axis_trait_interactive = default_y_init
 
-                            # Ajouter les informations écologiques
-                            if not ecology_df.empty:
-                                # Normaliser 'Espece_Ref' pour la jointure avec ecology_df
-                                current_pdf['Espece_Ref_norm_for_eco'] = current_pdf['Espece_Ref'].astype(str).str.strip().str.split().str[:2].str.join(" ").str.lower()
-                                if ecology_df.index.name == 'Espece_norm' and 'Description_Ecologie' in ecology_df.columns:
-                                    current_pdf['Ecologie_raw'] = current_pdf['Espece_Ref_norm_for_eco'].map(ecology_df['Description_Ecologie'])
-                                else: # Fallback si la structure de ecology_df n'est pas celle attendue
-                                    current_pdf['Ecologie_raw'] = pd.Series([np.nan] * len(current_pdf), index=current_pdf.index)
-                                current_pdf['Ecologie'] = current_pdf['Ecologie_raw'].apply(lambda x: format_ecology_for_hover(x))
-                                current_pdf['Ecologie'] = current_pdf['Ecologie'].fillna(format_ecology_for_hover(None)) # S'assurer qu'il n'y a pas de NaN
-                            else: # Si ecology_df est vide
-                                current_pdf['Ecologie'] = format_ecology_for_hover(None) 
-                            st.session_state.pdf = current_pdf.copy() # Stocker le DataFrame PCA final
+                    if not st.session_state.trait_exploration_df.empty:
+                        st.session_state.trait_exploration_df["Axe X"] = (st.session_state.trait_exploration_df["Variable"] == default_x_init)
+                        st.session_state.trait_exploration_df["Axe Y"] = (st.session_state.trait_exploration_df["Variable"] == default_y_init)
+                    
+                    st.session_state.trait_exploration_df_snapshot = st.session_state.trait_exploration_df.copy()
 
-                            # Calcul des communalités (contribution des variables aux axes PCA)
-                            if hasattr(pca_results, 'components_') and hasattr(pca_results, 'explained_variance_') and \
-                               isinstance(pca_results.components_, np.ndarray) and isinstance(pca_results.explained_variance_, np.ndarray) and \
-                               pca_results.components_.size > 0 and pca_results.explained_variance_.size > 0 :
-                                
-                                pca_components_values = pca_results.components_ # Vecteurs propres (lignes = composantes, colonnes = variables)
-                                explained_variance_values = pca_results.explained_variance_ # Variance expliquée par chaque composante
-                                # Les loadings sont les corrélations entre les variables originales et les composantes principales.
-                                # loadings = eigenvectors * sqrt(eigenvalues)
-                                # Ici, pca_results.components_ sont les eigenvectors. explained_variance_ sont les eigenvalues.
-                                eigenvectors_matrix = pca_components_values.T # Transposer pour avoir variables en lignes
-                                sqrt_eigenvalues_vector = np.sqrt(explained_variance_values) 
-                                loadings = eigenvectors_matrix * sqrt_eigenvalues_vector 
-                                communal = (loadings**2).sum(axis=1) # Somme des carrés des loadings par variable
-                                
-                                trait_columns_for_communal = actual_numeric_traits_for_pca # Noms des traits numériques utilisés
-                                
-                                if len(communal) == len(trait_columns_for_communal):
-                                    communal_percent = (communal * 100).round(0).astype(int) # En pourcentage
-                                    communal_percent_clipped = np.clip(communal_percent, 0, 100) # S'assurer que c'est entre 0 et 100
-                                    
-                                    st.session_state.vip_data_df_for_calc = pd.DataFrame({
-                                        "Variable": trait_columns_for_communal,
-                                        "Communalité (%)": communal_percent_clipped, 
-                                    }).sort_values("Communalité (%)", ascending=False).reset_index(drop=True)
-                                else: 
-                                    st.session_state.vip_data_df_for_calc = pd.DataFrame(columns=["Variable", "Communalité (%)"])
-                                    st.warning(f"Communalités non calculées (dimensions des loadings/traits incohérentes: {len(communal)} vs {len(trait_columns_for_communal)}).")
-                            else: # Si les résultats PCA sont incomplets
-                                st.session_state.vip_data_df_for_calc = pd.DataFrame(columns=["Variable", "Communalité (%)"])
-                                st.warning("Résultats PCA incomplets pour communalités (components_ ou explained_variance_ manquants/incorrects).")
-                            
-                            st.session_state.numeric_trait_names_for_interactive_plot = actual_numeric_traits_for_pca
-                            
-                            # Définir les axes par défaut pour le graphique interactif (basé sur les communalités)
-                            default_x_init, default_y_init = None, None
-                            if not st.session_state.vip_data_df_for_calc.empty and actual_numeric_traits_for_pca: 
-                                # Variables triées par communalité, présentes parmi les traits numériques
-                                top_vars_from_vip_numeric = [var for var in st.session_state.vip_data_df_for_calc["Variable"].tolist() if var in actual_numeric_traits_for_pca]
-                                if len(top_vars_from_vip_numeric) >= 1: default_x_init = top_vars_from_vip_numeric[0]
-                                if len(top_vars_from_vip_numeric) >= 2: default_y_init = top_vars_from_vip_numeric[1]
-                                elif len(top_vars_from_vip_numeric) == 1: # Si une seule variable avec communalité
-                                    other_numeric_traits = [t for t in actual_numeric_traits_for_pca if t != default_x_init]
-                                    default_y_init = other_numeric_traits[0] if other_numeric_traits else default_x_init # Utiliser une autre ou la même
-                            
-                            # Fallback si les communalités n'ont pas aidé
-                            if default_x_init is None and actual_numeric_traits_for_pca: default_x_init = actual_numeric_traits_for_pca[0]
-                            if default_y_init is None:
-                                if len(actual_numeric_traits_for_pca) >= 2: default_y_init = actual_numeric_traits_for_pca[1]
-                                elif default_x_init and len(actual_numeric_traits_for_pca) == 1: default_y_init = default_x_init # Si un seul trait, utiliser pour X et Y
-
-                            st.session_state.x_axis_trait_interactive = default_x_init
-                            st.session_state.y_axis_trait_interactive = default_y_init
-                            
-                            # Préparer le DataFrame pour l'éditeur interactif des axes
-                            if not st.session_state.vip_data_df_for_calc.empty and actual_numeric_traits_for_pca:
-                                temp_interactive_df = st.session_state.vip_data_df_for_calc[st.session_state.vip_data_df_for_calc["Variable"].isin(actual_numeric_traits_for_pca)].copy()
-                                temp_interactive_df["Axe X"] = temp_interactive_df["Variable"] == st.session_state.x_axis_trait_interactive
-                                temp_interactive_df["Axe Y"] = temp_interactive_df["Variable"] == st.session_state.y_axis_trait_interactive
-                                st.session_state.vip_data_df_interactive = temp_interactive_df[["Variable", "Communalité (%)", "Axe X", "Axe Y"]].reset_index(drop=True)
-                            else: # Si pas de communalités ou pas de traits numériques
-                                st.session_state.vip_data_df_interactive = pd.DataFrame(columns=["Variable", "Communalité (%)", "Axe X", "Axe Y"])
-                            st.session_state.vip_data_df_interactive_snapshot_for_comparison = st.session_state.vip_data_df_interactive.copy() # Snapshot pour détecter les changements
-                        else: # Si current_pdf est vide (coords_df était vide)
-                            st.warning("L'analyse n'a pas produit de coordonnées PCA (coords_df vide ou invalide).")
-                            st.session_state.run_main_analysis_once = False 
-                            st.session_state.analysis_has_run_for_current_selection = False
-            except Exception as e: # Erreur globale pendant l'analyse
-                st.error(f"Erreur lors de l'analyse principale : {e}"); st.exception(e)
-                st.session_state.run_main_analysis_once = False; st.session_state.analysis_has_run_for_current_selection = False;
-
-# Messages si l'analyse n'a pas été lancée
-elif not st.session_state.selected_habitats_indices and not ref.empty:
-    st.info("Veuillez sélectionner un ou plusieurs habitats à l'Étape 1 pour lancer l'analyse.")
-elif ref.empty: # Si les données de référence n'ont pas pu être chargées
-    st.warning("Les données de référence ('data_ref.csv') n'ont pas pu être chargées ou sont simulées. L'analyse est désactivée si les données réelles manquent.")
-
+            except Exception as e: st.error(f"Erreur traitement: {e}"); st.exception(e); st.session_state.run_main_processing_once = False; st.session_state.processing_has_run_for_current_selection = False;
+elif not st.session_state.selected_habitats_indices and not ref.empty: st.info("Sélectionnez habitat(s) à l'Étape 1.")
+elif ref.empty: st.warning("Données de référence non chargées/simulées. Traitement désactivé si données réelles manquantes.")
 
 # ---------------------------------------------------------------------------- #
-# ÉTAPE 2: EXPLORATION INTERACTIVE DES VARIABLES ET PARAM ACP
+# ÉTAPE 2: EXPLORATION INTERACTIVE DES TRAITS
 # ---------------------------------------------------------------------------- #
-if st.session_state.run_main_analysis_once and not st.session_state.get('sub', pd.DataFrame()).empty: # Si l'analyse a tourné et 'sub' n'est pas vide
-    st.markdown("---"); st.subheader("Étape 2: Exploration Interactive et Paramètres ACP")
-    col_interactive_table, col_interactive_graph = st.columns([1, 2]) # Layout en deux colonnes
-
-    with col_interactive_table: # Colonne de gauche : tableau et slider
-        st.markdown("##### Tableau d'exploration interactif")
-        df_editor_source_interactive = st.session_state.get('vip_data_df_interactive', pd.DataFrame())
-
+if st.session_state.run_main_processing_once and not st.session_state.get('sub', pd.DataFrame()).empty: 
+    st.markdown("---"); st.subheader("Étape 2: Exploration Interactive des Traits")
+    col_interactive_table, col_interactive_graph = st.columns([1, 2]) 
+    with col_interactive_table: 
+        st.markdown("##### Sélection des traits pour le graphique")
+        df_editor_source_interactive = st.session_state.get('trait_exploration_df', pd.DataFrame())
         if not df_editor_source_interactive.empty:
-            # S'assurer que le snapshot est à jour si la structure des colonnes change
-            snapshot_cols = list(st.session_state.get('vip_data_df_interactive_snapshot_for_comparison', pd.DataFrame()).columns)
-            current_cols = list(df_editor_source_interactive.columns)
-            if 'vip_data_df_interactive_snapshot_for_comparison' not in st.session_state or snapshot_cols != current_cols:
-                st.session_state.vip_data_df_interactive_snapshot_for_comparison = df_editor_source_interactive.copy()
+            if 'trait_exploration_df_snapshot' not in st.session_state or \
+               list(st.session_state.get('trait_exploration_df_snapshot', pd.DataFrame()).columns) != list(df_editor_source_interactive.columns) or \
+               not st.session_state.trait_exploration_df_snapshot.equals(df_editor_source_interactive) : # Pour s'assurer que le snapshot est à jour avec les contributions
+                st.session_state.trait_exploration_df_snapshot = df_editor_source_interactive.copy()
 
-            # Éditeur pour sélectionner les variables des axes X et Y du graphique interactif
             edited_df_interactive = st.data_editor(
                 df_editor_source_interactive, 
                 column_config={
-                    "Variable": st.column_config.TextColumn("Variable", disabled=True), # Non modifiable
-                    "Communalité (%)": st.column_config.NumberColumn("Communalité (%)", format="%d%%", disabled=True), # Non modifiable
-                    "Axe X": st.column_config.CheckboxColumn("Axe X"), # Sélection pour l'axe X
-                    "Axe Y": st.column_config.CheckboxColumn("Axe Y")  # Sélection pour l'axe Y
+                    "Variable": st.column_config.TextColumn("Trait disponible", disabled=True), 
+                    "Contribution (%)": st.column_config.NumberColumn("Contribution (%)", format="%.2f%%", disabled=True),
+                    "Axe X": st.column_config.CheckboxColumn("Axe X"), 
+                    "Axe Y": st.column_config.CheckboxColumn("Axe Y")
                 }, 
-                key="interactive_exploration_editor", 
+                key="interactive_trait_exploration_editor", 
                 use_container_width=True, 
-                hide_index=True, # Cacher l'index du DataFrame
-                num_rows="fixed" # Empêcher l'ajout/suppression de lignes ici
+                hide_index=True, 
+                num_rows="fixed"
             )
-            
-            made_change_in_interactive_axes = False # Flag pour détecter si un rerun est nécessaire
-
-            # Logique de mise à jour de l'axe X basé sur l'éditeur
+            made_change_in_interactive_axes = False 
             current_x_selection_from_state = st.session_state.x_axis_trait_interactive
             x_vars_checked_in_editor = edited_df_interactive[edited_df_interactive["Axe X"]]["Variable"].tolist()
-            
             new_x_selection_candidate = current_x_selection_from_state 
-
-            if not x_vars_checked_in_editor: # Si aucune case X n'est cochée
-                if current_x_selection_from_state is not None: 
-                    new_x_selection_candidate = None # Désélectionner l'axe X
-                    made_change_in_interactive_axes = True
-            elif len(x_vars_checked_in_editor) == 1: # Si une seule case X est cochée
-                single_checked_x = x_vars_checked_in_editor[0]
-                if single_checked_x != current_x_selection_from_state:
-                    new_x_selection_candidate = single_checked_x # Mettre à jour l'axe X
-                    made_change_in_interactive_axes = True
-            else: # Si plusieurs cases X sont cochées (prioriser la nouvelle sélection)
-                # Prendre la première nouvelle sélection qui n'est pas l'actuelle, ou la dernière cochée
-                potential_new_x_selections = [v for v in x_vars_checked_in_editor if v != current_x_selection_from_state]
-                if potential_new_x_selections:
-                    new_x_selection_candidate = potential_new_x_selections[0] 
-                else: # Si toutes les cochées sont l'actuelle (ne devrait pas arriver si une seule est permise logiquement)
-                    new_x_selection_candidate = x_vars_checked_in_editor[-1] 
-                made_change_in_interactive_axes = True 
-
+            if not x_vars_checked_in_editor: 
+                if current_x_selection_from_state is not None: new_x_selection_candidate = None; made_change_in_interactive_axes = True
+            elif len(x_vars_checked_in_editor) == 1: 
+                if x_vars_checked_in_editor[0] != current_x_selection_from_state: new_x_selection_candidate = x_vars_checked_in_editor[0]; made_change_in_interactive_axes = True
+            else: 
+                potential_new_x = [v for v in x_vars_checked_in_editor if v != current_x_selection_from_state]
+                new_x_selection_candidate = potential_new_x[0] if potential_new_x else x_vars_checked_in_editor[-1]; made_change_in_interactive_axes = True
             st.session_state.x_axis_trait_interactive = new_x_selection_candidate
-
-            # Logique de mise à jour de l'axe Y (similaire à X)
+            
             current_y_selection_from_state = st.session_state.y_axis_trait_interactive
             y_vars_checked_in_editor = edited_df_interactive[edited_df_interactive["Axe Y"]]["Variable"].tolist()
-
             new_y_selection_candidate = current_y_selection_from_state 
-
             if not y_vars_checked_in_editor: 
-                if current_y_selection_from_state is not None:
-                    new_y_selection_candidate = None
-                    made_change_in_interactive_axes = True
+                if current_y_selection_from_state is not None: new_y_selection_candidate = None; made_change_in_interactive_axes = True
             elif len(y_vars_checked_in_editor) == 1: 
-                single_checked_y = y_vars_checked_in_editor[0]
-                if single_checked_y != current_y_selection_from_state:
-                    new_y_selection_candidate = single_checked_y
-                    made_change_in_interactive_axes = True
+                if y_vars_checked_in_editor[0] != current_y_selection_from_state: new_y_selection_candidate = y_vars_checked_in_editor[0]; made_change_in_interactive_axes = True
             else: 
-                potential_new_y_selections = [v for v in y_vars_checked_in_editor if v != current_y_selection_from_state]
-                if potential_new_y_selections:
-                    new_y_selection_candidate = potential_new_y_selections[0]
-                else:
-                    new_y_selection_candidate = y_vars_checked_in_editor[-1]
-                made_change_in_interactive_axes = True
-            
+                potential_new_y = [v for v in y_vars_checked_in_editor if v != current_y_selection_from_state]
+                new_y_selection_candidate = potential_new_y[0] if potential_new_y else y_vars_checked_in_editor[-1]; made_change_in_interactive_axes = True
             st.session_state.y_axis_trait_interactive = new_y_selection_candidate
-
-            # Si les sélections d'axes ont changé, mettre à jour le DataFrame de l'éditeur et relancer
+            
             if made_change_in_interactive_axes:
-                df_updated_for_editor = df_editor_source_interactive.copy() 
-                # Mettre à jour les colonnes "Axe X" et "Axe Y" pour ne refléter qu'une seule sélection
+                df_updated_for_editor = df_editor_source_interactive.copy() # Utiliser la version avec les contributions déjà calculées
                 df_updated_for_editor["Axe X"] = (df_updated_for_editor["Variable"] == st.session_state.x_axis_trait_interactive)
                 df_updated_for_editor["Axe Y"] = (df_updated_for_editor["Variable"] == st.session_state.y_axis_trait_interactive)
+                st.session_state.trait_exploration_df = df_updated_for_editor 
+                st.session_state.trait_exploration_df_snapshot = df_updated_for_editor.copy(); st.rerun() 
+            elif not edited_df_interactive.equals(st.session_state.trait_exploration_df_snapshot): # Gérer les changements manuels qui ne sont pas une sélection unique
+                   st.session_state.trait_exploration_df_snapshot = edited_df_interactive.copy() 
+        else: st.info("Tableau de sélection des traits disponible après traitement si traits numériques identifiés.")
+    with col_interactive_graph: 
+        st.markdown("##### Graphique d'exploration des traits")
+        x_axis_plot = st.session_state.x_axis_trait_interactive; y_axis_plot = st.session_state.y_axis_trait_interactive 
+        numeric_traits_plot = st.session_state.get('numeric_trait_names_for_interactive_plot', []) 
+        sub_plot_releve = st.session_state.get('sub', pd.DataFrame()) 
+        selected_syntaxon_ids_for_plot = st.session_state.get('selected_syntaxon_ids', [])
+        syntaxons_to_plot_data = [s for s in st.session_state.get('top_matching_syntaxons', []) if s['id'] in selected_syntaxon_ids_for_plot]
+        
+        all_plot_data_list = []
+        species_plot_data_list = []
+
+        if not sub_plot_releve.empty and x_axis_plot and y_axis_plot and \
+           x_axis_plot in sub_plot_releve.columns and y_axis_plot in sub_plot_releve.columns:
+            required_cols_releve = ['Espece_User_Input_Raw', 'Ecologie', 'Source_Habitat']
+            if all(col in sub_plot_releve.columns for col in required_cols_releve):
+                cols_for_releve_plot = [x_axis_plot, y_axis_plot] + required_cols_releve
+                if all(col in sub_plot_releve.columns for col in cols_for_releve_plot):
+                    releve_plot_df_species = sub_plot_releve[cols_for_releve_plot].copy()
+                    releve_plot_df_species['Source_Donnee'] = 'Relevé Utilisateur'
+                    releve_plot_df_species['Nom_Affichage'] = releve_plot_df_species['Espece_User_Input_Raw']
+                    releve_plot_df_species['Groupe_Affichage'] = releve_plot_df_species['Source_Habitat'] 
+                    releve_plot_df_species['Symbole'] = 'circle'
+                    releve_plot_df_species['marker_size'] = SPECIES_MARKER_SIZE
+                    species_plot_data_list.append(releve_plot_df_species)
+                else:
+                    st.warning(f"Certaines colonnes pour le graphique des relevés sont manquantes dans 'sub_plot_releve': {x_axis_plot}, {y_axis_plot}")
+
+
+        if syntaxons_to_plot_data and not ref.empty and 'Espece' in ref.columns and x_axis_plot and y_axis_plot:
+            for i, syntaxon_info in enumerate(syntaxons_to_plot_data): 
+                syntaxon_name_for_graph = syntaxon_info.get('name_latin_short', f"Syntaxon {syntaxon_info.get('id', i+1)}")
+                current_syntaxon_species_list = []
+                for species_norm in syntaxon_info.get('species_set', []):
+                    match_in_ref = ref[ref_binom_series == species_norm] 
+                    if not match_in_ref.empty:
+                        ref_idx = match_in_ref.index[0]; 
+                        trait_data_syntaxon_sp = ref.loc[ref_idx].to_dict() 
+                        
+                        if x_axis_plot in trait_data_syntaxon_sp and y_axis_plot in trait_data_syntaxon_sp:
+                            eco_desc_raw = ecology_df.loc[species_norm, 'Description_Ecologie'] if not ecology_df.empty and species_norm in ecology_df.index else None
+                            espece_original_name_for_display = ref_original.loc[ref_idx, 'Espece'] if ref_idx in ref_original.index else species_norm.capitalize()
+
+                            current_syntaxon_species_list.append({
+                                x_axis_plot: trait_data_syntaxon_sp[x_axis_plot], 
+                                y_axis_plot: trait_data_syntaxon_sp[y_axis_plot],
+                                'Espece_User_Input_Raw': espece_original_name_for_display, 
+                                'Ecologie': format_ecology_for_hover(eco_desc_raw),
+                                'Source_Habitat': syntaxon_name_for_graph, 
+                                'Source_Donnee': f"Syntaxon: {syntaxon_name_for_graph}",
+                                'Nom_Affichage': espece_original_name_for_display, 
+                                'Groupe_Affichage': f"Syntaxon: {syntaxon_name_for_graph}",
+                                'Symbole': 'triangle-up', 
+                                'marker_size': SPECIES_MARKER_SIZE 
+                            })
+                if current_syntaxon_species_list: 
+                    species_plot_data_list.append(pd.DataFrame(current_syntaxon_species_list))
+        
+        if species_plot_data_list:
+            final_species_df = pd.concat(species_plot_data_list, ignore_index=True).dropna(subset=[x_axis_plot, y_axis_plot]) 
+            
+            if not final_species_df.empty:
+                plot_data_for_species_jitter = final_species_df.copy()
+                temp_x_col_grp = "_temp_x_species"; temp_y_col_grp = "_temp_y_species"
+                plot_data_for_species_jitter[temp_x_col_grp] = plot_data_for_species_jitter[x_axis_plot]
+                plot_data_for_species_jitter[temp_y_col_grp] = plot_data_for_species_jitter[y_axis_plot]
+                duplicates_mask_species = plot_data_for_species_jitter.duplicated(subset=[temp_x_col_grp, temp_y_col_grp], keep=False)
+                if duplicates_mask_species.any():
+                    x_min_s, x_max_s = plot_data_for_species_jitter[x_axis_plot].min(), plot_data_for_species_jitter[x_axis_plot].max()
+                    y_min_s, y_max_s = plot_data_for_species_jitter[y_axis_plot].min(), plot_data_for_species_jitter[y_axis_plot].max()
+                    x_range_s = (x_max_s - x_min_s) if pd.notna(x_max_s) and pd.notna(x_min_s) and (x_max_s - x_min_s) > 0 else 1.0
+                    y_range_s = (y_max_s - y_min_s) if pd.notna(y_max_s) and pd.notna(y_min_s) and (y_max_s - y_min_s) > 0 else 1.0
+                    
+                    jitter_x_val_s = x_range_s*0.015 
+                    jitter_y_val_s = y_range_s*0.015 
+
+                    if abs(jitter_x_val_s) <1e-9: jitter_x_val_s=0.015 
+                    if abs(jitter_y_val_s) <1e-9: jitter_y_val_s=0.015
+
+                    for _, group_df_s in plot_data_for_species_jitter[duplicates_mask_species].groupby([temp_x_col_grp, temp_y_col_grp]):
+                        if len(group_df_s) > 1: 
+                            if not pd.api.types.is_float_dtype(plot_data_for_species_jitter[x_axis_plot]): plot_data_for_species_jitter[x_axis_plot] = plot_data_for_species_jitter[x_axis_plot].astype(float)
+                            if not pd.api.types.is_float_dtype(plot_data_for_species_jitter[y_axis_plot]): plot_data_for_species_jitter[y_axis_plot] = plot_data_for_species_jitter[y_axis_plot].astype(float)
+                            for i_jitter_s, idx_jitter_s in enumerate(group_df_s.index): 
+                                angle_s = 2 * np.pi * i_jitter_s / len(group_df_s) 
+                                plot_data_for_species_jitter.loc[idx_jitter_s, x_axis_plot] += jitter_x_val_s * np.cos(angle_s)
+                                plot_data_for_species_jitter.loc[idx_jitter_s, y_axis_plot] += jitter_y_val_s * np.sin(angle_s)
+                plot_data_for_species_jitter.drop(columns=[temp_x_col_grp, temp_y_col_grp], inplace=True)
+                all_plot_data_list.append(plot_data_for_species_jitter)
                 
-                st.session_state.vip_data_df_interactive = df_updated_for_editor 
-                st.session_state.vip_data_df_interactive_snapshot_for_comparison = df_updated_for_editor.copy() 
-                st.rerun() # Relancer pour que le graphique interactif se mette à jour
-            # Si les données ont changé d'une autre manière (ne devrait pas arriver avec num_rows="fixed" et disabled cols)
-            elif not edited_df_interactive.equals(st.session_state.vip_data_df_interactive_snapshot_for_comparison):
-                 st.session_state.vip_data_df_interactive_snapshot_for_comparison = edited_df_interactive.copy() # Mettre à jour le snapshot
-        else: 
-            st.info("Le tableau d'exploration sera disponible après l'analyse si des traits numériques sont identifiés.")
-
-        st.markdown("---") 
-        st.markdown("##### Paramètres ACP")
-        # Slider pour le nombre de clusters
-        n_clusters_selected_val = st.slider(
-            "Nombre de clusters (pour ACP)", 2, 8, # Min, Max
-            value=st.session_state.get('n_clusters_slider_main_value', 3), # Valeur actuelle/défaut
-            key="n_clusters_slider_main_key_moved", 
-            disabled=ref.empty or st.session_state.get('sub', pd.DataFrame()).empty, # Désactivé si pas de données
-            help="Choisissez le nombre de groupes à former lors de l'Analyse en Composantes Principales."
-        )
-        # Si la valeur du slider change, réinitialiser l'analyse et relancer
-        if n_clusters_selected_val != st.session_state.get('n_clusters_slider_main_value', 3):
-            st.session_state.n_clusters_slider_main_value = n_clusters_selected_val
-            st.session_state.analysis_has_run_for_current_selection = False # Forcer la relance de l'analyse
-            st.rerun()
+                centroid_data_list = []
+                if x_axis_plot and y_axis_plot:
+                    for group_label_centroid in final_species_df["Groupe_Affichage"].unique():
+                        group_data_orig = final_species_df[final_species_df["Groupe_Affichage"] == group_label_centroid]
+                        if not group_data_orig.empty and x_axis_plot in group_data_orig.columns and y_axis_plot in group_data_orig.columns:
+                            mean_x = group_data_orig[x_axis_plot].mean()
+                            mean_y = group_data_orig[y_axis_plot].mean()
+                            if pd.notna(mean_x) and pd.notna(mean_y): 
+                                centroid_data_list.append({
+                                    x_axis_plot: mean_x, y_axis_plot: mean_y,
+                                    'Groupe_Affichage': group_label_centroid,
+                                    'Nom_Affichage': f"Centroïde {group_label_centroid}",
+                                    'Symbole': 'circle-cross-open', 
+                                    'marker_size': CENTROID_MARKER_SIZE, 
+                                    'Source_Donnee': "Centroïde", 
+                                    'Ecologie': "Centre de gravité du groupe", 
+                                    'Source_Habitat': group_label_centroid 
+                                })
+                if centroid_data_list:
+                    all_plot_data_list.append(pd.DataFrame(centroid_data_list))
+            else: 
+                 st.info("Aucune donnée d'espèce valide à afficher sur le graphique après suppression des valeurs manquantes pour les axes sélectionnés.")
 
 
-    with col_interactive_graph: # Colonne de droite : graphique interactif
-        st.markdown("##### Graphique d'exploration")
-        x_axis_plot = st.session_state.x_axis_trait_interactive # Trait pour l'axe X
-        y_axis_plot = st.session_state.y_axis_trait_interactive # Trait pour l'axe Y
-        numeric_traits_plot = st.session_state.get('numeric_trait_names_for_interactive_plot', []) # Liste des traits numériques disponibles
-        sub_plot = st.session_state.get('sub', pd.DataFrame()) # Données de traits des espèces sélectionnées
-        pdf_plot = st.session_state.get('pdf', pd.DataFrame()) # Données PCA
-
-        # Vérifications avant de tracer le graphique interactif
-        if not numeric_traits_plot: st.warning("Aucun trait numérique trouvé pour l'exploration interactive.")
-        elif not x_axis_plot or not y_axis_plot: st.info("Veuillez sélectionner une variable pour l'Axe X et une pour l'Axe Y dans le tableau à gauche.")
-        elif x_axis_plot not in numeric_traits_plot or y_axis_plot not in numeric_traits_plot: st.warning("Une ou les deux variables sélectionnées ne sont plus valides. Veuillez re-sélectionner.")
-        elif sub_plot.empty or pdf_plot.empty or x_axis_plot not in sub_plot.columns or y_axis_plot not in sub_plot.columns: 
-            st.warning("Données pour le graphique interactif non prêtes, incohérentes ou variables sélectionnées non trouvées. Vérifiez l'analyse principale.")
-        elif not pdf_plot.index.equals(sub_plot.index): # Vérifier l'alignement des index
-             st.warning("Désalignement des données entre les résultats PCA (pdf_plot) et les données de traits (sub_plot). Le graphique interactif peut être incorrect.")
-        else: # Si tout est OK pour le graphique interactif
-            required_pdf_cols_interactive = ['Espece_User', 'Ecologie', 'Cluster', 'Source_Habitat'] 
-            if not all(col in pdf_plot.columns for col in required_pdf_cols_interactive): st.warning("Colonnes requises (Espece_User, Ecologie, Cluster, Source_Habitat) manquent dans les données PCA pour le graphique interactif.")
-            else:
-                # Préparer les données pour le graphique interactif
-                # Utiliser sub_plot pour les valeurs des traits X et Y, et pdf_plot pour les métadonnées (Cluster, Habitat, etc.)
-                # S'assurer que l'index est cohérent pour la jointure implicite lors de la création du DataFrame
-                plot_data_interactive = pd.DataFrame({
-                    'Espece_User': pdf_plot['Espece_User'], 
-                    'Ecologie': pdf_plot['Ecologie'],    
-                    x_axis_plot: sub_plot[x_axis_plot],    
-                    y_axis_plot: sub_plot[y_axis_plot],    
-                    'Cluster': pdf_plot['Cluster'],        
-                    'Source_Habitat': pdf_plot['Source_Habitat'] 
-                }).set_index(pdf_plot.index) # Conserver l'index original pour la cohérence
-                
-                # Gestion des points superposés (jittering)
-                plot_data_to_use = plot_data_interactive.copy()
-                # Utiliser des noms temporaires pour éviter les conflits si x_axis_plot ou y_axis_plot sont '_temp_x'/'_temp_y'
-                temp_x_col_grp = "_temp_x_for_grouping"; temp_y_col_grp = "_temp_y_for_grouping"
-                plot_data_to_use[temp_x_col_grp] = plot_data_to_use[x_axis_plot]; plot_data_to_use[temp_y_col_grp] = plot_data_to_use[y_axis_plot]
-                duplicates_mask = plot_data_to_use.duplicated(subset=[temp_x_col_grp, temp_y_col_grp], keep=False) # Identifier les points avec mêmes coordonnées X,Y
-                
-                if duplicates_mask.any(): # S'il y a des points superposés
-                    # Calculer l'amplitude du jitter en fonction de la plage des données
-                    x_min_val, x_max_val = plot_data_to_use[x_axis_plot].min(), plot_data_to_use[x_axis_plot].max()
-                    y_min_val, y_max_val = plot_data_to_use[y_axis_plot].min(), plot_data_to_use[y_axis_plot].max()
-                    x_range_val = (x_max_val - x_min_val) if pd.notna(x_max_val) and pd.notna(x_min_val) else 0
-                    y_range_val = (y_max_val - y_min_val) if pd.notna(y_max_val) and pd.notna(y_min_val) else 0
-                    # Jitter proportionnel à la plage, avec un fallback si la plage est nulle
-                    jitter_x = x_range_val*0.015 if x_range_val >1e-9 else (abs(plot_data_to_use[x_axis_plot].mean())*0.015 if abs(plot_data_to_use[x_axis_plot].mean()) >1e-9 else 0.015)
-                    jitter_y = y_range_val*0.015 if y_range_val >1e-9 else (abs(plot_data_to_use[y_axis_plot].mean())*0.015 if abs(plot_data_to_use[y_axis_plot].mean()) >1e-9 else 0.015)
-                    if abs(jitter_x) <1e-9: jitter_x=0.015 # Valeur minimale de jitter
-                    if abs(jitter_y) <1e-9: jitter_y=0.015
-
-                    # Appliquer le jitter en cercle pour les points superposés
-                    for _, group in plot_data_to_use[duplicates_mask].groupby([temp_x_col_grp, temp_y_col_grp]):
-                        if len(group) > 1: # S'il y a plus d'un point dans le groupe superposé
-                            # S'assurer que les colonnes sont de type float pour l'ajout du jitter
-                            if not pd.api.types.is_float_dtype(plot_data_to_use[x_axis_plot]): plot_data_to_use[x_axis_plot] = plot_data_to_use[x_axis_plot].astype(float)
-                            if not pd.api.types.is_float_dtype(plot_data_to_use[y_axis_plot]): plot_data_to_use[y_axis_plot] = plot_data_to_use[y_axis_plot].astype(float)
-                            for i, idx in enumerate(group.index): # Pour chaque point du groupe
-                                angle = 2 * np.pi * i / len(group) # Répartir les points en cercle
-                                plot_data_to_use.loc[idx, x_axis_plot] += jitter_x * np.cos(angle)
-                                plot_data_to_use.loc[idx, y_axis_plot] += jitter_y * np.sin(angle)
-                plot_data_to_use.drop(columns=[temp_x_col_grp, temp_y_col_grp], inplace=True) # Supprimer les colonnes temporaires
-
-                # Déterminer la coloration et le titre de la légende
-                color_by_interactive = "Source_Habitat" if len(st.session_state.selected_habitats_indices) > 1 else "Cluster"
-                legend_title_interactive = "Habitat d'Origine" if len(st.session_state.selected_habitats_indices) > 1 else "Cluster PCA"
-
-                # Créer le scatter plot interactif
-                fig_interactive_scatter = px.scatter(
-                    plot_data_to_use, x=x_axis_plot, y=y_axis_plot,
-                    color=color_by_interactive, 
-                    text="Espece_User", hover_name="Espece_User", # Texte sur les points et au survol
-                    custom_data=["Espece_User", "Ecologie", "Source_Habitat", "Cluster"], # Données pour le hovertemplate
-                    template="plotly_dark", height=600, color_discrete_sequence=COLOR_SEQUENCE
-                )
-                fig_interactive_scatter.update_traces(
-                    textposition="top center", marker=dict(opacity=0.8, size=8), # Style des marqueurs
-                    textfont=dict(size=LABEL_FONT_SIZE_ON_PLOTS), # Taille de la police du texte sur les points
-                    hovertemplate=( # Template HTML pour le survol
-                        f"<span style='font-size: {HOVER_SPECIES_FONT_SIZE}px;'><b>%{{customdata[0]}}</b></span><br>" # Nom de l'espèce
-                        f"Habitat: %{{customdata[2]}}<br>" # Habitat d'origine
-                        f"Cluster PCA: %{{customdata[3]}}<br>" # Cluster PCA
-                        f"<br><span style='font-size: {HOVER_ECOLOGY_TITLE_FONT_SIZE}px;'><i>Écologie:</i></span><br>" # Titre écologie
-                        f"<span style='font-size: {HOVER_ECOLOGY_TEXT_FONT_SIZE}px;'>%{{customdata[1]}}</span>" # Description écologique
-                        "<extra></extra>" # Masquer les informations supplémentaires par défaut de Plotly
-                    )
-                )
-                
-                # Ajouter les enveloppes convexes (Convex Hulls)
-                unique_groups_interactive = sorted(plot_data_to_use[color_by_interactive].unique())
-                # Étendre la séquence de couleurs si nécessaire
-                extended_color_sequence_interactive = COLOR_SEQUENCE * (len(unique_groups_interactive) // len(COLOR_SEQUENCE) + 1)
-                group_color_map_interactive = { # Mapper chaque groupe à une couleur
-                    lbl: extended_color_sequence_interactive[i % len(extended_color_sequence_interactive)] for i, lbl in enumerate(unique_groups_interactive)
+        if all_plot_data_list:
+            plot_data_to_use = pd.concat(all_plot_data_list, ignore_index=True)
+            if not plot_data_to_use.empty and x_axis_plot in plot_data_to_use.columns and y_axis_plot in plot_data_to_use.columns:
+                unique_groups_fig = sorted(plot_data_to_use["Groupe_Affichage"].unique())
+                extended_color_sequence_fig = COLOR_SEQUENCE * (len(unique_groups_fig) // len(COLOR_SEQUENCE) + 1)
+                group_color_map_fig = {
+                    group_label: extended_color_sequence_fig[i % len(extended_color_sequence_fig)]
+                    for i, group_label in enumerate(unique_groups_fig)
                 }
 
-                for group_label in unique_groups_interactive: # Pour chaque groupe (habitat ou cluster)
-                    group_points_df_interactive = plot_data_to_use[plot_data_to_use[color_by_interactive] == group_label]
-                    if x_axis_plot in group_points_df_interactive and y_axis_plot in group_points_df_interactive:
-                        # Points uniques pour l'enveloppe (éviter les erreurs avec des points dupliqués par le jitter)
-                        points_for_hull = group_points_df_interactive[[x_axis_plot, y_axis_plot]].drop_duplicates().values 
-                        if len(points_for_hull) >= MIN_POINTS_FOR_HULL: # Besoin d'au moins 3 points pour une enveloppe
-                            try:
-                                hull_interactive = ConvexHull(points_for_hull) 
-                                # Chemin de l'enveloppe (fermer le polygone)
-                                hull_path_interactive = points_for_hull[np.append(hull_interactive.vertices, hull_interactive.vertices[0])]
-                                clr_int = group_color_map_interactive.get(group_label, COLOR_SEQUENCE[0]) # Couleur de l'enveloppe
-                                fig_interactive_scatter.add_trace(go.Scatter(
-                                    x=hull_path_interactive[:, 0], y=hull_path_interactive[:, 1], 
-                                    fill="toself", fillcolor=clr_int, # Remplissage
-                                    line=dict(color=clr_int, width=1.5), mode='lines', 
-                                    name=f'{legend_title_interactive} {group_label} Hull', opacity=0.2, # Opacité
-                                    showlegend=False, hoverinfo='skip' # Ne pas montrer dans la légende ni au survol
-                                ))
-                            except Exception as e: print(f"Erreur calcul Hull interactif {group_label} ({x_axis_plot}, {y_axis_plot}): {e}")
+                fig_interactive = px.scatter(plot_data_to_use, x=x_axis_plot, y=y_axis_plot, 
+                                             color="Groupe_Affichage", 
+                                             color_discrete_map=group_color_map_fig, 
+                                             symbol='Symbole', size='marker_size',
+                                             text="Nom_Affichage", hover_name="Nom_Affichage", 
+                                             custom_data=["Nom_Affichage", "Ecologie", "Source_Habitat", "Source_Donnee"], 
+                                             template="plotly_dark", height=600,
+                                             size_max=CENTROID_MARKER_SIZE + 5) 
                 
-                fig_interactive_scatter.update_layout(
-                    title_text=f"{y_axis_plot} vs. {x_axis_plot}", title_x=0.5, # Titre du graphique
-                    xaxis_title=x_axis_plot, yaxis_title=y_axis_plot, dragmode='pan', # Titres des axes, mode de drag
-                    legend_title_text=legend_title_interactive # Titre de la légende
-                )
-                st.plotly_chart(fig_interactive_scatter, use_container_width=True, config={'scrollZoom': True}) # Afficher le graphique
+                fig_interactive.update_traces(textposition="top center", 
+                                              marker=dict(opacity=0.8, line=dict(width=0.5, color='DarkSlateGrey')), 
+                                              textfont=dict(size=LABEL_FONT_SIZE_ON_PLOTS), 
+                                              hovertemplate=(f"<span style='font-size: {HOVER_SPECIES_FONT_SIZE}px;'><b>%{{customdata[0]}}</b></span><br>Source: %{{customdata[3]}}<br>Habitat/Syntaxon: %{{customdata[2]}}<br><br><span style='font-size: {HOVER_ECOLOGY_TITLE_FONT_SIZE}px;'><i>Écologie:</i></span><br><span style='font-size: {HOVER_ECOLOGY_TEXT_FONT_SIZE}px;'>%{{customdata[1]}}</span><extra></extra>" ))
+                
+                for trace in fig_interactive.data: 
+                    if trace.name in group_color_map_fig: 
+                        if hasattr(trace.marker, 'symbol') and trace.marker.symbol == 'circle-cross-open': 
+                            trace.marker.line.color = group_color_map_fig[trace.name] 
+                            trace.marker.line.width = 2 
 
-# Message si l'analyse a été lancée mais 'sub' est vide (aucune espèce traitée)
-elif st.session_state.run_main_analysis_once and st.session_state.get('sub', pd.DataFrame()).empty :
-    st.markdown("---")
-    st.subheader("Étape 2: Exploration Interactive et Paramètres ACP")
-    st.warning("L'analyse principale n'a pas abouti à des données suffisantes pour cette section (aucune espèce trouvée ou traitée). Veuillez vérifier les étapes précédentes.")
-
+                if 'plot_data_for_species_jitter' in locals() and not plot_data_for_species_jitter.empty:
+                    unique_groups_for_hulls = sorted(plot_data_for_species_jitter["Groupe_Affichage"].unique())
+                    for grp_lbl_hull in unique_groups_for_hulls: 
+                        grp_df_hull = plot_data_for_species_jitter[plot_data_for_species_jitter["Groupe_Affichage"] == grp_lbl_hull]
+                        if x_axis_plot in grp_df_hull and y_axis_plot in grp_df_hull:
+                            hull_pts_raw = grp_df_hull[[x_axis_plot, y_axis_plot]].dropna().drop_duplicates()
+                            if not hull_pts_raw.empty:
+                                hull_pts = hull_pts_raw.values
+                                if len(hull_pts) >= MIN_POINTS_FOR_HULL: 
+                                    try:
+                                        hull = ConvexHull(hull_pts); hull_path_data = hull_pts[np.append(hull.vertices, hull.vertices[0])]
+                                        hull_clr = group_color_map_fig.get(grp_lbl_hull, COLOR_SEQUENCE[0]) 
+                                        fig_interactive.add_trace(go.Scatter(x=hull_path_data[:, 0], y=hull_path_data[:, 1], 
+                                                                             fill="toself", fillcolor=hull_clr, 
+                                                                             line=dict(color=hull_clr, width=1.5), 
+                                                                             mode='lines', name=f'{grp_lbl_hull} Hull', opacity=0.2, 
+                                                                             showlegend=False, hoverinfo='skip' ))
+                                    except Exception as e_hull: print(f"Erreur Hull {grp_lbl_hull}: {e_hull}")
+                fig_interactive.update_layout(title_text=f"{y_axis_plot} vs. {x_axis_plot}", title_x=0.5, 
+                                              xaxis_title=x_axis_plot, yaxis_title=y_axis_plot, 
+                                              dragmode='pan', legend_title_text="Groupe" )
+                st.plotly_chart(fig_interactive, use_container_width=True, config={'scrollZoom': True})
+            else:
+                st.info("Aucune donnée à afficher sur le graphique pour les axes sélectionnés.")
+        else: st.info("Préparez les données et sélectionnez les axes pour afficher le graphique interactif.")
+elif st.session_state.run_main_processing_once and st.session_state.get('sub', pd.DataFrame()).empty :
+    st.markdown("---"); st.subheader("Étape 2: Exploration Interactive des Traits")
+    st.warning("Traitement principal sans données suffisantes pour cette section.")
 
 # ---------------------------------------------------------------------------- #
-# ÉTAPE 3: VISUALISATION PRINCIPALE (ACP)
+# ÉTAPE 3: IDENTIFICATION ET SÉLECTION DES SYNTAXONS PERTINENTS
 # ---------------------------------------------------------------------------- #
-st.markdown("---")
-st.subheader("Étape 3: Visualisation Principale (ACP)")
-_, col_pca_plot_area = st.columns([0.01, 0.99]) # Colonne principale pour le graphique ACP
-
-if st.session_state.run_main_analysis_once: 
-    pdf_display_pca = st.session_state.get('pdf', pd.DataFrame()) # Données PCA à afficher
+if st.session_state.run_main_processing_once and not st.session_state.get('sub', pd.DataFrame()).empty and syntaxon_data_list:
+    st.markdown("---"); st.subheader("Étape 3: Identification et Sélection des Syntaxons Pertinents")
     
-    # Vérifier si les données PCA sont prêtes et contiennent les colonnes nécessaires
-    if not pdf_display_pca.empty and "PC1" in pdf_display_pca.columns and "Cluster" in pdf_display_pca.columns and \
-       "Espece_User" in pdf_display_pca.columns and "Ecologie" in pdf_display_pca.columns and "Source_Habitat" in pdf_display_pca.columns:
-        
-        y_pca_col = "PC2" if "PC2" in pdf_display_pca.columns else None # Utiliser PC2 s'il existe
-        
-        if "PC1" in pdf_display_pca.columns and y_pca_col : # Si au moins PC1 et PC2 sont disponibles
-            # Déterminer la coloration et le titre de la légende pour le graphique PCA
-            color_by_pca = "Source_Habitat" if len(st.session_state.selected_habitats_indices) > 1 else "Cluster"
-            legend_title_pca = "Habitat d'Origine" if len(st.session_state.selected_habitats_indices) > 1 else "Cluster PCA"
+    st.markdown('<div id="syntaxon-display-area">', unsafe_allow_html=True)
 
-            # Créer le scatter plot PCA
-            fig_pca = px.scatter(
-                pdf_display_pca, x="PC1", y=y_pca_col, 
-                color=color_by_pca, 
-                text="Espece_User", 
-                hover_name="Espece_User", 
-                custom_data=["Espece_User", "Ecologie", "Source_Habitat", "Cluster"], 
-                template="plotly_dark", height=500, color_discrete_sequence=COLOR_SEQUENCE
-            )
-            fig_pca.update_traces(
-                textposition="top center", marker=dict(opacity=0.7), 
-                hovertemplate=( # Template HTML pour le survol
-                    f"<span style='font-size: {HOVER_SPECIES_FONT_SIZE}px;'><b>%{{customdata[0]}}</b></span><br>"
-                    f"Habitat: %{{customdata[2]}}<br>"
-                    f"Cluster PCA: %{{customdata[3]}}<br>"
-                    f"<br><span style='font-size: {HOVER_ECOLOGY_TITLE_FONT_SIZE}px;'><i>Écologie:</i></span><br>"
-                    f"<span style='font-size: {HOVER_ECOLOGY_TEXT_FONT_SIZE}px;'>%{{customdata[1]}}</span>"
-                    "<extra></extra>"
-                ), 
-                textfont=dict(size=LABEL_FONT_SIZE_ON_PLOTS) # Taille de la police du texte sur les points
-            ) 
+    releve_species_normalized = set(normalize_species_name(sp) for sp in st.session_state.sub['Espece_Ref_Original'].unique()); releve_species_normalized.discard(None) 
+    if not releve_species_normalized: st.warning("Aucune espèce normalisée issue des relevés pour comparaison.")
+    else:
+        syntaxon_matches = []
+        for syntaxon in syntaxon_data_list:
+            common_species = releve_species_normalized.intersection(syntaxon['species_set'])
+            score = len(common_species) 
+            if score > 0: 
+                syntaxon_matches.append({
+                    'id': syntaxon['id'], 
+                    'name_latin': syntaxon['name_latin'], 
+                    'name_latin_short': ' '.join(syntaxon['name_latin'].split()[:3]), 
+                    'description': syntaxon.get('description', "Description non disponible."), 
+                    'species_set': syntaxon['species_set'], 
+                    'common_species_set': common_species, 
+                    'score': score
+                })
+        sorted_syntaxons = sorted(syntaxon_matches, key=lambda x: (-x['score'], x['name_latin']))
+        st.session_state.top_matching_syntaxons = sorted_syntaxons[:5] 
+
+        if not st.session_state.top_matching_syntaxons: st.info("Aucun syntaxon correspondant trouvé (avec au moins une espèce en commun).")
+        else:
+            st.markdown(f"Cliquez sur un syntaxon pour le sélectionner/désélectionner pour le graphique de l'Étape 2.")
+            st.markdown(f"Les **{len(st.session_state.top_matching_syntaxons)} syntaxons les plus probables** sont :")
             
-            # Ajouter les enveloppes convexes (Convex Hulls) pour le graphique PCA
-            unique_groups_pca = sorted(pdf_display_pca[color_by_pca].unique())
-            extended_color_sequence_pca = COLOR_SEQUENCE * (len(unique_groups_pca) // len(COLOR_SEQUENCE) + 1)
-            group_color_map_pca = {
-                lbl: extended_color_sequence_pca[i % len(extended_color_sequence_pca)] for i, lbl in enumerate(unique_groups_pca)
-            }
+            valid_top_syntaxon_ids = {s['id'] for s in st.session_state.top_matching_syntaxons}
+            st.session_state.selected_syntaxon_ids = [sid for sid in st.session_state.selected_syntaxon_ids if sid in valid_top_syntaxon_ids]
+
+            num_syntaxons_to_show = len(st.session_state.top_matching_syntaxons)
+            cols_syntaxon_display = st.columns(num_syntaxons_to_show if num_syntaxons_to_show > 0 else 1)
             
-            for group_label_pca in unique_groups_pca: # Pour chaque groupe
-                group_points_df_pca = pdf_display_pca[pdf_display_pca[color_by_pca] == group_label_pca]
-                if not group_points_df_pca.empty and "PC1" in group_points_df_pca.columns and y_pca_col in group_points_df_pca.columns:
-                    # Utiliser les points uniques pour l'enveloppe
-                    unique_group_points_pca = group_points_df_pca[["PC1", y_pca_col]].drop_duplicates().values
-                    if len(unique_group_points_pca) >= MIN_POINTS_FOR_HULL: # Besoin d'au moins 3 points
-                        try:
-                            hull_pca_calc = ConvexHull(unique_group_points_pca)
-                            hull_path_pca = unique_group_points_pca[np.append(hull_pca_calc.vertices, hull_pca_calc.vertices[0])] 
-                            clr_pca = group_color_map_pca.get(group_label_pca, COLOR_SEQUENCE[0])
-                            fig_pca.add_trace(go.Scatter(
-                                x=hull_path_pca[:, 0], y=hull_path_pca[:, 1], fill="toself", fillcolor=clr_pca, 
-                                line=dict(color=clr_pca, width=1.5), mode='lines', 
-                                name=f'{legend_title_pca} {group_label_pca} Hull', opacity=0.2, 
-                                showlegend=False, hoverinfo='skip'
-                            ))
-                        except Exception as e: print(f"Erreur calcul Hull ACP pour groupe {group_label_pca}: {e}")
-            fig_pca.update_layout(
-                title_text="Plot PCA des espèces", title_x=0.5, 
-                legend_title_text=legend_title_pca, 
-                dragmode='pan'
-            )
-        else: # Si moins de deux composantes principales sont disponibles
-            fig_pca = None # Réinitialiser fig_pca
-            if not pdf_display_pca.empty : 
-                with col_pca_plot_area: st.warning("Moins de deux composantes principales disponibles pour le graphique PCA. Le graphique ne peut être affiché.")
-    # else: fig_pca reste None si pdf_display_pca est vide ou mal formé
+            selection_changed_in_syntaxons = False
+            for i, matched_syntaxon in enumerate(st.session_state.top_matching_syntaxons):
+                with cols_syntaxon_display[i % num_syntaxons_to_show if num_syntaxons_to_show > 0 else 0]:
+                    is_syntaxon_selected = matched_syntaxon['id'] in st.session_state.selected_syntaxon_ids
+                    button_syntaxon_type = "primary" if is_syntaxon_selected else "secondary"
+                    button_syntaxon_label = f"{matched_syntaxon.get('name_latin_short', matched_syntaxon['id'])} ({matched_syntaxon['score']})"
+                    
+                    st.markdown(f'<div class="syntaxon-select-button">', unsafe_allow_html=True)
+                    if st.button(button_syntaxon_label, key=f"syntaxon_select_{matched_syntaxon['id']}", type=button_syntaxon_type, use_container_width=True):
+                        if is_syntaxon_selected:
+                            st.session_state.selected_syntaxon_ids.remove(matched_syntaxon['id'])
+                        else:
+                            st.session_state.selected_syntaxon_ids.append(matched_syntaxon['id'])
+                        selection_changed_in_syntaxons = True
+                    st.markdown('</div>', unsafe_allow_html=True)
+                    
+                    st.markdown(f"**{matched_syntaxon['id']}**")
+                    st.markdown(f"*{matched_syntaxon['name_latin']}*")
+                    st.caption(matched_syntaxon.get('description', "Description non disponible."))
 
-# Affichage du graphique PCA (ou des messages d'avertissement)
-with col_pca_plot_area: 
-    if fig_pca: st.plotly_chart(fig_pca, use_container_width=True, config={'scrollZoom': True}) 
-    elif st.session_state.run_main_analysis_once and st.session_state.get('sub', pd.DataFrame()).empty:
-        st.warning("L'analyse n'a pas produit de résultats affichables pour le PCA (pas d'espèces traitées ou PCA impossible).")
-    elif st.session_state.run_main_analysis_once and fig_pca is None and not st.session_state.get('pdf', pd.DataFrame()).empty : 
-        pass # Le message d'avertissement pour PCA (moins de 2 PCs) est déjà géré ci-dessus
-    elif st.session_state.run_main_analysis_once : # Cas général si fig_pca n'a pas été créé
-        st.warning("Le graphique PCA n'a pas pu être généré. Vérifiez les données d'entrée et les paramètres.")
+                    present_species_set = matched_syntaxon['common_species_set']
+                    all_syntaxon_species_set = matched_syntaxon['species_set']
+                    absent_species_set = all_syntaxon_species_set.difference(present_species_set)
 
+                    col_present, col_absent = st.columns(2)
 
-# ---------------------------------------------------------------------------- #
-# ÉTAPE 4: COMPOSITION DES CLUSTERS (ACP)
-# ---------------------------------------------------------------------------- #
-if st.session_state.run_main_analysis_once and not st.session_state.get('sub', pd.DataFrame()).empty: 
-    st.markdown("---"); st.subheader("Étape 4: Composition des Clusters (issus de l'ACP)")
-    pdf_compo = st.session_state.get('pdf', pd.DataFrame()) # Données PCA pour la composition des clusters
-    # Vérifier si les données sont prêtes
-    if not pdf_compo.empty and 'Cluster' in pdf_compo.columns and 'Espece_User' in pdf_compo.columns and 'Source_Habitat' in pdf_compo.columns:
-        # Créer une colonne pour l'affichage combinant espèce et habitat source
-        pdf_compo['Species_Instance_Display'] = pdf_compo['Espece_User'] + " (" + pdf_compo['Source_Habitat'] + ")"
-        
-        compositions_display = [] # Pour stocker les informations de chaque cluster
-        for c_pca in sorted(pdf_compo["Cluster"].unique()): # Pour chaque label de cluster unique
-            cluster_data = pdf_compo[pdf_compo["Cluster"] == c_pca] # Données du cluster actuel
-            # Instances uniques d'espèces (espèce + habitat) dans le cluster
-            unique_species_instances_in_cluster = cluster_data["Species_Instance_Display"].unique()
-            compositions_display.append({
-                "cluster_label": c_pca, 
-                "count": len(unique_species_instances_in_cluster), 
-                "species_list": sorted(list(unique_species_instances_in_cluster)) # Liste triée des instances
-            })
+                    with col_present:
+                        st.markdown(f"**{len(present_species_set)} Taxons Présents**")
+                        if present_species_set:
+                            html_present_list = "<ul>"
+                            for species_name_norm in sorted(list(present_species_set)):
+                                species_display_name = species_name_norm.capitalize()
+                                html_present_list += f"<li>{species_display_name}</li>"
+                            html_present_list += "</ul>"
+                            st.markdown(html_present_list, unsafe_allow_html=True)
+                        else:
+                            st.markdown("_(Aucun)_")
+                    
+                    with col_absent:
+                        st.markdown(f"**{len(absent_species_set)} Taxons Absents**")
+                        if absent_species_set:
+                            html_absent_list = "<ul>"
+                            for species_name_norm in sorted(list(absent_species_set)):
+                                species_display_name = species_name_norm.capitalize()
+                                html_absent_list += f"<li>{species_display_name}</li>"
+                            html_absent_list += "</ul>"
+                            st.markdown(html_absent_list, unsafe_allow_html=True)
+                        else:
+                            st.markdown("_(Aucun)_")
+            
+            if selection_changed_in_syntaxons: st.rerun()
+    
+    st.markdown('</div>', unsafe_allow_html=True) # Close syntaxon-display-area
 
-        if compositions_display and any(d['count'] > 0 for d in compositions_display): # Si des clusters avec des espèces existent
-            # Déterminer le nombre de colonnes pour l'affichage (max 3)
-            num_clusters_disp = len([d for d in compositions_display if d['count']>0]) 
-            num_cols_disp = min(num_clusters_disp, 3) if num_clusters_disp > 0 else 1
-            cluster_cols_layout = st.columns(num_cols_disp) # Créer les colonnes
-            col_idx = 0
-            for comp_data in compositions_display: # Pour chaque cluster à afficher
-                if comp_data['count'] > 0: 
-                    with cluster_cols_layout[col_idx % num_cols_disp]: # Placer dans la colonne appropriée
-                        st.markdown(f"**Cluster PCA {comp_data['cluster_label']}** ({comp_data['count']} instances d'espèces)")
-                        for species_instance_name in comp_data['species_list']: st.markdown(f"- {species_instance_name}")
-                    col_idx += 1
-            if col_idx == 0 : st.info("Aucun cluster (ACP) avec des espèces à afficher.") # Si aucun cluster n'avait d'espèces
-        else: st.info("La composition des clusters (ACP) sera affichée ici après l'analyse (pas de données de cluster).")
-    else: st.info("La composition des clusters (ACP) sera affichée ici après l'analyse (données de PCA non disponibles ou incomplètes).")
-# Message si l'analyse a été lancée mais 'sub' est vide
-elif st.session_state.run_main_analysis_once: 
-    st.markdown("---"); st.subheader("Étape 4: Composition des Clusters (ACP)")
-    st.info("Analyse lancée, mais aucune donnée d'espèce n'a pu être traitée pour la composition des clusters.")
-
+elif st.session_state.run_main_processing_once and not syntaxon_data_list:
+    st.markdown("---"); st.subheader("Étape 3: Identification et Sélection des Syntaxons Pertinents")
+    st.warning("Données des syntaxons non chargées/vides. Identification impossible.")
 
 # ---------------------------------------------------------------------------- #
-# ÉTAPE 5: ANALYSE DES CO-OCCURRENCES D'ESPÈCES (basée sur les syntaxons)
+# ÉTAPE 4: ANALYSE DES CO-OCCURRENCES D'ESPÈCES
 # ---------------------------------------------------------------------------- #
 def style_cooccurrence_row_parsing(row, max_overall_count, vmin_count=1):
-    """
-    Applique un style de fond coloré aux cellules des voisins.
-    Le compte de co-occurrence est PARSÉ depuis la chaîne de caractères de la cellule.
-    """
-    styles = pd.Series('', index=row.index) 
-    color_start_rgb = (40, 40, 40) 
-    color_end_rgb = (200, 50, 50)   
-
-    for col_name in ['Voisin 1', 'Voisin 2', 'Voisin 3']: # Colonnes cibles pour le style
+    styles = pd.Series('', index=row.index); color_start_rgb = (40,40,40); color_end_rgb = (200,50,50)   
+    for col_name in ['Voisin 1', 'Voisin 2', 'Voisin 3']: 
         if col_name in row.index:
-            cell_value = str(row[col_name]) # Valeur de la cellule (ex: "Nom Espèce - 7" ou "-")
-            current_count = 0 # Default count
-
-            # Essayer d'extraire le compte de la chaîne "Nom - Compte"
+            cell_value = str(row[col_name]); current_count = 0 
             match = re.search(r' - (\d+)$', cell_value)
-            if match:
-                current_count = int(match.group(1))
-            
+            if match: current_count = int(match.group(1))
             if current_count > 0:
-                if max_overall_count == vmin_count: 
-                    ratio = 1.0 if current_count >= vmin_count else 0.0
-                elif max_overall_count > vmin_count:
-                    ratio = (current_count - vmin_count) / (max_overall_count - vmin_count)
-                    ratio = max(0.0, min(ratio, 1.0)) 
-                else: 
-                    ratio = 0.0
-                
-                r = int(color_start_rgb[0] + ratio * (color_end_rgb[0] - color_start_rgb[0]))
-                g = int(color_start_rgb[1] + ratio * (color_end_rgb[1] - color_start_rgb[1]))
-                b = int(color_start_rgb[2] + ratio * (color_end_rgb[2] - color_start_rgb[2]))
+                if max_overall_count == vmin_count: ratio = 1.0 if current_count >= vmin_count else 0.0
+                elif max_overall_count > vmin_count: ratio = max(0.0, min((current_count - vmin_count) / (max_overall_count - vmin_count), 1.0)) 
+                else: ratio = 0.0
+                r,g,b = (int(color_start_rgb[j] + ratio * (color_end_rgb[j] - color_start_rgb[j])) for j in range(3))
                 styles[col_name] = f'background-color: rgb({r},{g},{b})'
-            else:
-                styles[col_name] = 'background-color: none' 
+            else: styles[col_name] = 'background-color: none' 
     return styles
 
-if st.session_state.run_main_analysis_once and \
-   not st.session_state.get('sub', pd.DataFrame()).empty and \
-   syntaxon_data_list:
-
-    st.markdown("---")
-    st.subheader("Étape 5: Analyse des Co-occurrences d'Espèces (basée sur les listes de syntaxons)")
-
-    principal_species_original_names_from_sub = st.session_state.sub['Espece_Ref_Original'].unique()
-    
-    # Collecter d'abord les noms et les comptes bruts
-    raw_cooccurrence_data_for_max_calc = []
-    for principal_species_original in principal_species_original_names_from_sub:
-        principal_species_normalized = normalize_species_name_for_villaret(principal_species_original)
-        if not principal_species_normalized:
-            continue
-
-        co_occurrence_counts_for_this_principal = defaultdict(int)
-        for syntaxon_record in syntaxon_data_list:
-            if principal_species_normalized in syntaxon_record['species_set']:
-                for other_species_in_syntaxon_normalized in syntaxon_record['species_set']:
-                    if other_species_in_syntaxon_normalized != principal_species_normalized:
-                        co_occurrence_counts_for_this_principal[other_species_in_syntaxon_normalized] += 1
-        
-        # Stocker les comptes pour le calcul du max_overall_cooccurrence
-        if co_occurrence_counts_for_this_principal:
-            sorted_co_occurrences = sorted(co_occurrence_counts_for_this_principal.items(), key=lambda item: item[1], reverse=True)
+if st.session_state.run_main_processing_once and not st.session_state.get('sub', pd.DataFrame()).empty and syntaxon_data_list:
+    st.markdown("---"); st.subheader("Étape 4: Analyse des Co-occurrences d'Espèces (basée sur listes de syntaxons)")
+    principal_species_original_names = st.session_state.sub['Espece_Ref_Original'].unique()
+    raw_cooccurrence_data = []
+    for principal_sp_orig in principal_species_original_names:
+        principal_sp_norm = normalize_species_name(principal_sp_orig)
+        if not principal_sp_norm: continue
+        co_counts = defaultdict(int)
+        for syntaxon_rec in syntaxon_data_list:
+            if principal_sp_norm in syntaxon_rec['species_set']:
+                for other_sp_norm in syntaxon_rec['species_set']:
+                    if other_sp_norm != principal_sp_norm: co_counts[other_sp_norm] += 1
+        if co_counts:
+            sorted_co = sorted(co_counts.items(), key=lambda item: item[1], reverse=True)
             for i in range(3):
-                if i < len(sorted_co_occurrences):
-                    _, count = sorted_co_occurrences[i]
-                    raw_cooccurrence_data_for_max_calc.append({'count': count}) # Stocker uniquement le compte
-    
-    # Calculer max_overall_cooccurrence à partir des comptes collectés
-    all_counts_for_styling = [item['count'] for item in raw_cooccurrence_data_for_max_calc if item['count'] > 0]
-    max_overall_cooccurrence = max(all_counts_for_styling) if all_counts_for_styling else 0
-    min_cooccurrence_for_color = 1 
-
-    # Maintenant, préparer la liste pour l'affichage final
-    cooccurrence_display_list = []
-    for principal_species_original in principal_species_original_names_from_sub:
-        principal_species_normalized = normalize_species_name_for_villaret(principal_species_original)
-        if not principal_species_normalized: continue # Redondant si déjà filtré mais sûr
-
-        co_occurrence_counts_for_this_principal = defaultdict(int) # Recalculer ou stocker si performance critique
-        for syntaxon_record in syntaxon_data_list:
-            if principal_species_normalized in syntaxon_record['species_set']:
-                for other_species_in_syntaxon_normalized in syntaxon_record['species_set']:
-                    if other_species_in_syntaxon_normalized != principal_species_normalized:
-                        co_occurrence_counts_for_this_principal[other_species_in_syntaxon_normalized] += 1
-        
-        display_row_dict = {'Espèce Principale (issue des relevés)': principal_species_original}
-        if co_occurrence_counts_for_this_principal:
-            sorted_co_occurrences = sorted(co_occurrence_counts_for_this_principal.items(), key=lambda item: item[1], reverse=True)
+                if i < len(sorted_co): raw_cooccurrence_data.append({'count': sorted_co[i][1]}) 
+    all_counts = [item['count'] for item in raw_cooccurrence_data if item['count'] > 0]
+    max_cooccurrence = max(all_counts) if all_counts else 0; min_cooccurrence_color = 1 
+    cooccurrence_display = []
+    for principal_sp_orig in principal_species_original_names:
+        principal_sp_norm = normalize_species_name(principal_sp_orig)
+        if not principal_sp_norm: continue 
+        co_counts = defaultdict(int) 
+        for syntaxon_rec in syntaxon_data_list:
+            if principal_sp_norm in syntaxon_rec['species_set']:
+                for other_sp_norm in syntaxon_rec['species_set']:
+                    if other_sp_norm != principal_sp_norm: co_counts[other_sp_norm] += 1
+        row_dict = {'Espèce Principale (issue des relevés)': principal_sp_orig}
+        if co_counts:
+            sorted_co = sorted(co_counts.items(), key=lambda item: item[1], reverse=True)
             for i in range(3): 
-                neighbor_num = i + 1 
-                display_col_name = f'Voisin {neighbor_num}'
-                if i < len(sorted_co_occurrences):
-                    name, count = sorted_co_occurrences[i]
-                    display_row_dict[display_col_name] = f"{str(name).capitalize()} - {count}"
-                else: 
-                    display_row_dict[display_col_name] = "-"
+                col = f'Voisin {i+1}'
+                row_dict[col] = f"{str(sorted_co[i][0]).capitalize()} - {sorted_co[i][1]}" if i < len(sorted_co) else "-"
         else: 
-            for neighbor_num in [1, 2, 3]:
-                display_row_dict[f'Voisin {neighbor_num}'] = "-"
-        cooccurrence_display_list.append(display_row_dict)
-
-    if cooccurrence_display_list:
-        # Ce DataFrame n'a que les colonnes d'affichage finales
-        cooccurrence_df_for_display = pd.DataFrame(cooccurrence_display_list)
-        
-        st.markdown("Ce tableau présente, pour chaque espèce de vos relevés (colonne 1), les trois espèces qui lui sont le plus fréquemment associées au sein des listes d'espèces caractéristiques des syntaxons de référence (`data_villaret.csv`). Le nombre après le tiret indique le nombre de syntaxons partagés. La couleur de fond indique l'intensité de cette co-occurrence (du gris foncé au rouge).")
-        
-        styled_object = cooccurrence_df_for_display.style.apply(
-            style_cooccurrence_row_parsing, 
-            max_overall_count=max_overall_cooccurrence,
-            vmin_count=min_cooccurrence_for_color,
-            axis=1, 
-            subset=None # La fonction de style reçoit la ligne entière de cooccurrence_df_for_display
-        ).format(na_rep="-")
-        
-        st.dataframe(styled_object, use_container_width=True)
-
-    else:
-        st.info("Aucune donnée de co-occurrence à afficher pour les espèces sélectionnées et les syntaxons disponibles.")
-
-elif st.session_state.run_main_analysis_once and not syntaxon_data_list:
-    st.markdown("---")
-    st.subheader("Étape 5: Analyse des Co-occurrences d'Espèces (basée sur les listes de syntaxons)")
-    st.warning("Les données des syntaxons ('data_villaret.csv') n'ont pas pu être chargées, sont vides, ou ne contiennent aucun syntaxon valide. L'analyse des co-occurrences ne peut pas être effectuée.")
-
+            for i in range(3): row_dict[f'Voisin {i+1}'] = "-"
+        cooccurrence_display.append(row_dict)
+    if cooccurrence_display:
+        cooccurrence_df = pd.DataFrame(cooccurrence_display)
+        st.markdown("Tableau des co-occurrences (3 plus fréquentes) pour chaque espèce des relevés, basé sur les syntaxons de référence. Couleur = intensité.")
+        styled_df = cooccurrence_df.style.apply(style_cooccurrence_row_parsing, max_overall_count=max_cooccurrence, vmin_count=min_cooccurrence_color, axis=1).format(na_rep="-")
+        st.dataframe(styled_df, use_container_width=True)
+    else: st.info("Aucune donnée de co-occurrence à afficher.")
+elif st.session_state.run_main_processing_once and not syntaxon_data_list:
+    st.markdown("---"); st.subheader("Étape 4: Analyse des Co-occurrences d'Espèces")
+    st.warning("Données des syntaxons non chargées/vides. Analyse de co-occurrence impossible.")
