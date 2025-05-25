@@ -136,6 +136,9 @@ LABEL_FONT_SIZE_ON_PLOTS = 15
 HOVER_SPECIES_FONT_SIZE = 15  
 HOVER_ECOLOGY_TITLE_FONT_SIZE = 14 
 HOVER_ECOLOGY_TEXT_FONT_SIZE = 13  
+CENTROID_MARKER_SIZE = 15
+SPECIES_MARKER_SIZE = 8
+
 
 @st.cache_data
 def load_data(file_path="data_ref.csv"):
@@ -490,94 +493,153 @@ if st.session_state.run_main_processing_once and not st.session_state.get('sub',
         sub_plot_releve = st.session_state.get('sub', pd.DataFrame()) 
         selected_syntaxon_ids_for_plot = st.session_state.get('selected_syntaxon_ids', [])
         syntaxons_to_plot_data = [s for s in st.session_state.get('top_matching_syntaxons', []) if s['id'] in selected_syntaxon_ids_for_plot]
+        
+        # Initialiser la liste pour toutes les données à tracer (espèces + centroïdes)
         all_plot_data_list = []
-        if not sub_plot_releve.empty and x_axis_plot and y_axis_plot and x_axis_plot in sub_plot_releve.columns and y_axis_plot in sub_plot_releve.columns:
+        
+        # DataFrame pour les espèces (avant ajout des centroïdes)
+        species_plot_data_list = []
+
+        # 1. Préparer les données des espèces du relevé utilisateur
+        if not sub_plot_releve.empty and x_axis_plot and y_axis_plot and \
+           x_axis_plot in sub_plot_releve.columns and y_axis_plot in sub_plot_releve.columns:
             required_cols_releve = ['Espece_User_Input_Raw', 'Ecologie', 'Source_Habitat']
             if all(col in sub_plot_releve.columns for col in required_cols_releve):
-                releve_plot_df = sub_plot_releve[[x_axis_plot, y_axis_plot] + required_cols_releve].copy()
-                releve_plot_df['Source_Donnee'] = 'Relevé Utilisateur'; releve_plot_df['Nom_Affichage'] = releve_plot_df['Espece_User_Input_Raw']
-                releve_plot_df['Groupe_Affichage'] = releve_plot_df['Source_Habitat']; releve_plot_df['Symbole'] = 'circle'
-                all_plot_data_list.append(releve_plot_df)
+                releve_plot_df_species = sub_plot_releve[[x_axis_plot, y_axis_plot] + required_cols_releve].copy()
+                releve_plot_df_species['Source_Donnee'] = 'Relevé Utilisateur'
+                releve_plot_df_species['Nom_Affichage'] = releve_plot_df_species['Espece_User_Input_Raw']
+                releve_plot_df_species['Groupe_Affichage'] = releve_plot_df_species['Source_Habitat'] 
+                releve_plot_df_species['Symbole'] = 'circle'
+                releve_plot_df_species['marker_size'] = SPECIES_MARKER_SIZE # Taille pour les espèces
+                species_plot_data_list.append(releve_plot_df_species)
+
+        # 2. Préparer les données des espèces des syntaxons sélectionnés
         if syntaxons_to_plot_data and not ref.empty and 'Espece' in ref.columns and x_axis_plot and y_axis_plot:
             for i, syntaxon_info in enumerate(syntaxons_to_plot_data): 
                 syntaxon_name_for_graph = syntaxon_info.get('name_latin_short', f"Syntaxon {syntaxon_info.get('id', i+1)}")
-                species_to_plot_from_syntaxon = []
+                current_syntaxon_species_list = []
                 for species_norm in syntaxon_info.get('species_set', []):
                     match_in_ref = ref[ref_binom_series == species_norm]
                     if not match_in_ref.empty:
                         ref_idx = match_in_ref.index[0]; trait_data_syntaxon_sp = ref.loc[ref_idx].to_dict()
                         if x_axis_plot in trait_data_syntaxon_sp and y_axis_plot in trait_data_syntaxon_sp:
                             eco_desc_raw = ecology_df.loc[species_norm, 'Description_Ecologie'] if not ecology_df.empty and species_norm in ecology_df.index else None
-                            species_to_plot_from_syntaxon.append({
+                            current_syntaxon_species_list.append({
                                 x_axis_plot: trait_data_syntaxon_sp[x_axis_plot], y_axis_plot: trait_data_syntaxon_sp[y_axis_plot],
                                 'Espece_User_Input_Raw': ref.loc[ref_idx, 'Espece'], 'Ecologie': format_ecology_for_hover(eco_desc_raw),
                                 'Source_Habitat': syntaxon_name_for_graph, 'Source_Donnee': f"Syntaxon: {syntaxon_name_for_graph}",
                                 'Nom_Affichage': ref.loc[ref_idx, 'Espece'], 'Groupe_Affichage': f"Syntaxon: {syntaxon_name_for_graph}",
-                                'Symbole': 'triangle-up' })
-                if species_to_plot_from_syntaxon: all_plot_data_list.append(pd.DataFrame(species_to_plot_from_syntaxon))
+                                'Symbole': 'triangle-up', 'marker_size': SPECIES_MARKER_SIZE })
+                if current_syntaxon_species_list: 
+                    species_plot_data_list.append(pd.DataFrame(current_syntaxon_species_list))
+        
+        # Combiner toutes les données des espèces
+        if species_plot_data_list:
+            final_species_df = pd.concat(species_plot_data_list, ignore_index=True)
+            plot_data_for_species_jitter = final_species_df.copy()
+
+            # Appliquer le jitter UNIQUEMENT aux points des espèces
+            temp_x_col_grp = "_temp_x_species"; temp_y_col_grp = "_temp_y_species"
+            plot_data_for_species_jitter[temp_x_col_grp] = plot_data_for_species_jitter[x_axis_plot]
+            plot_data_for_species_jitter[temp_y_col_grp] = plot_data_for_species_jitter[y_axis_plot]
+            duplicates_mask_species = plot_data_for_species_jitter.duplicated(subset=[temp_x_col_grp, temp_y_col_grp], keep=False)
+            if duplicates_mask_species.any():
+                x_min_s, x_max_s = plot_data_for_species_jitter[x_axis_plot].min(), plot_data_for_species_jitter[x_axis_plot].max()
+                y_min_s, y_max_s = plot_data_for_species_jitter[y_axis_plot].min(), plot_data_for_species_jitter[y_axis_plot].max()
+                x_range_s = (x_max_s - x_min_s) if pd.notna(x_max_s) and pd.notna(x_min_s) else 0
+                y_range_s = (y_max_s - y_min_s) if pd.notna(y_max_s) and pd.notna(y_min_s) else 0
+                jitter_x_val_s = x_range_s*0.015 if x_range_s >1e-9 else (abs(plot_data_for_species_jitter[x_axis_plot].mean())*0.015 if abs(plot_data_for_species_jitter[x_axis_plot].mean()) >1e-9 else 0.015)
+                jitter_y_val_s = y_range_s*0.015 if y_range_s >1e-9 else (abs(plot_data_for_species_jitter[y_axis_plot].mean())*0.015 if abs(plot_data_for_species_jitter[y_axis_plot].mean()) >1e-9 else 0.015)
+                if abs(jitter_x_val_s) <1e-9: jitter_x_val_s=0.015 
+                if abs(jitter_y_val_s) <1e-9: jitter_y_val_s=0.015
+                for _, group_df_s in plot_data_for_species_jitter[duplicates_mask_species].groupby([temp_x_col_grp, temp_y_col_grp]):
+                    if len(group_df_s) > 1: 
+                        if not pd.api.types.is_float_dtype(plot_data_for_species_jitter[x_axis_plot]): plot_data_for_species_jitter[x_axis_plot] = plot_data_for_species_jitter[x_axis_plot].astype(float)
+                        if not pd.api.types.is_float_dtype(plot_data_for_species_jitter[y_axis_plot]): plot_data_for_species_jitter[y_axis_plot] = plot_data_for_species_jitter[y_axis_plot].astype(float)
+                        for i_jitter_s, idx_jitter_s in enumerate(group_df_s.index): 
+                            angle_s = 2 * np.pi * i_jitter_s / len(group_df_s) 
+                            plot_data_for_species_jitter.loc[idx_jitter_s, x_axis_plot] += jitter_x_val_s * np.cos(angle_s)
+                            plot_data_for_species_jitter.loc[idx_jitter_s, y_axis_plot] += jitter_y_val_s * np.sin(angle_s)
+            plot_data_for_species_jitter.drop(columns=[temp_x_col_grp, temp_y_col_grp], inplace=True)
+            all_plot_data_list.append(plot_data_for_species_jitter) # Ajouter les espèces (potentiellement jittered)
+
+            # 3. Calculer et préparer les données des centroïdes à partir du DataFrame des espèces NON jittered (final_species_df)
+            centroid_data_list = []
+            if x_axis_plot and y_axis_plot: # S'assurer que les axes sont définis
+                for group_label_centroid in final_species_df["Groupe_Affichage"].unique():
+                    group_data_orig = final_species_df[final_species_df["Groupe_Affichage"] == group_label_centroid]
+                    if not group_data_orig.empty:
+                        mean_x = group_data_orig[x_axis_plot].mean()
+                        mean_y = group_data_orig[y_axis_plot].mean()
+                        centroid_data_list.append({
+                            x_axis_plot: mean_x, y_axis_plot: mean_y,
+                            'Groupe_Affichage': group_label_centroid,
+                            'Nom_Affichage': f"Centroïde {group_label_centroid}",
+                            'Symbole': 'circle-open-dot', # Symbole cible
+                            'marker_size': CENTROID_MARKER_SIZE, # Taille pour les centroïdes
+                            'Source_Donnee': "Centroïde", 
+                            'Ecologie': "Centre de gravité du groupe", 
+                            'Source_Habitat': group_label_centroid # Ou une autre désignation
+                        })
+            if centroid_data_list:
+                all_plot_data_list.append(pd.DataFrame(centroid_data_list))
+        
+        # Combiner toutes les données (espèces jittered + centroïdes) pour le graphique final
         if all_plot_data_list:
-            final_plot_df = pd.concat(all_plot_data_list, ignore_index=True)
+            plot_data_to_use = pd.concat(all_plot_data_list, ignore_index=True)
+
             if not numeric_traits_plot: st.warning("Aucun trait numérique trouvé.")
             elif not x_axis_plot or not y_axis_plot: st.info("Sélectionnez traits pour Axe X et Y.")
             elif x_axis_plot not in numeric_traits_plot or y_axis_plot not in numeric_traits_plot: st.warning("Traits sélectionnés non valides.")
-            elif final_plot_df.empty or x_axis_plot not in final_plot_df.columns or y_axis_plot not in final_plot_df.columns: st.warning("Données de graphique non prêtes/incohérentes.")
+            elif plot_data_to_use.empty or x_axis_plot not in plot_data_to_use.columns or y_axis_plot not in plot_data_to_use.columns: st.warning("Données de graphique non prêtes/incohérentes.")
             else: 
-                plot_data_to_use = final_plot_df.copy()
-                temp_x_col_grp = "_temp_x"; temp_y_col_grp = "_temp_y"
-                plot_data_to_use[temp_x_col_grp] = plot_data_to_use[x_axis_plot]; plot_data_to_use[temp_y_col_grp] = plot_data_to_use[y_axis_plot]
-                duplicates_mask = plot_data_to_use.duplicated(subset=[temp_x_col_grp, temp_y_col_grp], keep=False)
-                if duplicates_mask.any():
-                    x_min, x_max = plot_data_to_use[x_axis_plot].min(), plot_data_to_use[x_axis_plot].max()
-                    y_min, y_max = plot_data_to_use[y_axis_plot].min(), plot_data_to_use[y_axis_plot].max()
-                    x_range = (x_max - x_min) if pd.notna(x_max) and pd.notna(x_min) else 0
-                    y_range = (y_max - y_min) if pd.notna(y_max) and pd.notna(y_min) else 0
-                    jitter_x_val = x_range*0.015 if x_range >1e-9 else (abs(plot_data_to_use[x_axis_plot].mean())*0.015 if abs(plot_data_to_use[x_axis_plot].mean()) >1e-9 else 0.015)
-                    jitter_y_val = y_range*0.015 if y_range >1e-9 else (abs(plot_data_to_use[y_axis_plot].mean())*0.015 if abs(plot_data_to_use[y_axis_plot].mean()) >1e-9 else 0.015)
-                    if abs(jitter_x_val) <1e-9: jitter_x_val=0.015 
-                    if abs(jitter_y_val) <1e-9: jitter_y_val=0.015
-                    for _, group_df in plot_data_to_use[duplicates_mask].groupby([temp_x_col_grp, temp_y_col_grp]):
-                        if len(group_df) > 1: 
-                            if not pd.api.types.is_float_dtype(plot_data_to_use[x_axis_plot]): plot_data_to_use[x_axis_plot] = plot_data_to_use[x_axis_plot].astype(float)
-                            if not pd.api.types.is_float_dtype(plot_data_to_use[y_axis_plot]): plot_data_to_use[y_axis_plot] = plot_data_to_use[y_axis_plot].astype(float)
-                            for i_jitter, idx_jitter in enumerate(group_df.index): 
-                                angle = 2 * np.pi * i_jitter / len(group_df) 
-                                plot_data_to_use.loc[idx_jitter, x_axis_plot] += jitter_x_val * np.cos(angle)
-                                plot_data_to_use.loc[idx_jitter, y_axis_plot] += jitter_y_val * np.sin(angle)
-                plot_data_to_use.drop(columns=[temp_x_col_grp, temp_y_col_grp], inplace=True)
-                fig_interactive = px.scatter(plot_data_to_use, x=x_axis_plot, y=y_axis_plot, color="Groupe_Affichage", symbol='Symbole', 
-                    text="Nom_Affichage", hover_name="Nom_Affichage", custom_data=["Nom_Affichage", "Ecologie", "Source_Habitat", "Source_Donnee"], 
-                    template="plotly_dark", height=600, color_discrete_sequence=COLOR_SEQUENCE)
-                fig_interactive.update_traces(textposition="top center", marker=dict(opacity=0.8, size=8), textfont=dict(size=LABEL_FONT_SIZE_ON_PLOTS), 
-                    hovertemplate=(f"<span style='font-size: {HOVER_SPECIES_FONT_SIZE}px;'><b>%{{customdata[0]}}</b></span><br>Source: %{{customdata[3]}}<br>Habitat/Syntaxon: %{{customdata[2]}}<br><br><span style='font-size: {HOVER_ECOLOGY_TITLE_FONT_SIZE}px;'><i>Écologie:</i></span><br><span style='font-size: {HOVER_ECOLOGY_TEXT_FONT_SIZE}px;'>%{{customdata[1]}}</span><extra></extra>" ))
+                fig_interactive = px.scatter(plot_data_to_use, x=x_axis_plot, y=y_axis_plot, 
+                                             color="Groupe_Affichage", symbol='Symbole', size='marker_size',
+                                             text="Nom_Affichage", hover_name="Nom_Affichage", 
+                                             custom_data=["Nom_Affichage", "Ecologie", "Source_Habitat", "Source_Donnee"], 
+                                             template="plotly_dark", height=600, color_discrete_sequence=COLOR_SEQUENCE,
+                                             size_max=CENTROID_MARKER_SIZE + 5) # Permettre une taille max un peu plus grande
+                
+                fig_interactive.update_traces(textposition="top center", 
+                                              marker=dict(opacity=0.8, line=dict(width=0.5, color='DarkSlateGrey')), # Ajout d'un léger contour aux marqueurs
+                                              textfont=dict(size=LABEL_FONT_SIZE_ON_PLOTS), 
+                                              hovertemplate=(f"<span style='font-size: {HOVER_SPECIES_FONT_SIZE}px;'><b>%{{customdata[0]}}</b></span><br>Source: %{{customdata[3]}}<br>Habitat/Syntaxon: %{{customdata[2]}}<br><br><span style='font-size: {HOVER_ECOLOGY_TITLE_FONT_SIZE}px;'><i>Écologie:</i></span><br><span style='font-size: {HOVER_ECOLOGY_TEXT_FONT_SIZE}px;'>%{{customdata[1]}}</span><extra></extra>" ))
+                
                 unique_groups_fig = sorted(plot_data_to_use["Groupe_Affichage"].unique())
-                # Créer une map de couleurs pour les groupes afin de la réutiliser pour les enveloppes
-                # S'assurer que la séquence de couleurs est assez longue
                 extended_color_sequence_fig = COLOR_SEQUENCE * (len(unique_groups_fig) // len(COLOR_SEQUENCE) + 1)
                 group_color_map_fig = {
                     group_label: extended_color_sequence_fig[i % len(extended_color_sequence_fig)]
                     for i, group_label in enumerate(unique_groups_fig)
                 }
-                # Appliquer les couleurs aux traces existantes pour s'assurer de la cohérence
-                for trace in fig_interactive.data:
+                for trace in fig_interactive.data: # Assurer la cohérence des couleurs pour les traces principales
                     if trace.name in group_color_map_fig:
                         trace.marker.color = group_color_map_fig[trace.name]
+                        if trace.marker.symbol == 'circle-open-dot': # Style spécifique pour centroïdes si besoin
+                            trace.marker.line=dict(color=group_color_map_fig[trace.name], width=2)
 
-                for grp_lbl in unique_groups_fig: 
-                    grp_df = plot_data_to_use[plot_data_to_use["Groupe_Affichage"] == grp_lbl]
-                    if x_axis_plot in grp_df and y_axis_plot in grp_df:
-                        hull_pts = grp_df[[x_axis_plot, y_axis_plot]].drop_duplicates().values 
-                        if len(hull_pts) >= MIN_POINTS_FOR_HULL: 
-                            try:
-                                hull = ConvexHull(hull_pts); hull_path_data = hull_pts[np.append(hull.vertices, hull.vertices[0])]
-                                # Utiliser la couleur du groupe pour l'enveloppe
-                                hull_clr = group_color_map_fig.get(grp_lbl, COLOR_SEQUENCE[0]) # Fallback sur la première couleur
-                                fig_interactive.add_trace(go.Scatter(x=hull_path_data[:, 0], y=hull_path_data[:, 1], 
-                                                                     fill="toself", fillcolor=hull_clr, # Couleur de remplissage
-                                                                     line=dict(color=hull_clr, width=1.5), # Couleur de la ligne
-                                                                     mode='lines', name=f'{grp_lbl} Hull', opacity=0.2, 
-                                                                     showlegend=False, hoverinfo='skip' ))
-                            except Exception as e_hull: print(f"Erreur Hull {grp_lbl}: {e_hull}")
-                fig_interactive.update_layout(title_text=f"{y_axis_plot} vs. {x_axis_plot}", title_x=0.5, xaxis_title=x_axis_plot, yaxis_title=y_axis_plot, dragmode='pan', legend_title_text="Groupe" )
+
+                # Dessiner les enveloppes convexes pour les données des espèces UNIQUEMENT (avant ajout des centroïdes)
+                # Utiliser plot_data_for_species_jitter pour les enveloppes
+                if 'plot_data_for_species_jitter' in locals() and not plot_data_for_species_jitter.empty:
+                    unique_groups_for_hulls = sorted(plot_data_for_species_jitter["Groupe_Affichage"].unique())
+                    for grp_lbl_hull in unique_groups_for_hulls: 
+                        grp_df_hull = plot_data_for_species_jitter[plot_data_for_species_jitter["Groupe_Affichage"] == grp_lbl_hull]
+                        if x_axis_plot in grp_df_hull and y_axis_plot in grp_df_hull:
+                            hull_pts = grp_df_hull[[x_axis_plot, y_axis_plot]].drop_duplicates().values 
+                            if len(hull_pts) >= MIN_POINTS_FOR_HULL: 
+                                try:
+                                    hull = ConvexHull(hull_pts); hull_path_data = hull_pts[np.append(hull.vertices, hull.vertices[0])]
+                                    hull_clr = group_color_map_fig.get(grp_lbl_hull, COLOR_SEQUENCE[0]) 
+                                    fig_interactive.add_trace(go.Scatter(x=hull_path_data[:, 0], y=hull_path_data[:, 1], 
+                                                                         fill="toself", fillcolor=hull_clr, 
+                                                                         line=dict(color=hull_clr, width=1.5), 
+                                                                         mode='lines', name=f'{grp_lbl_hull} Hull', opacity=0.2, 
+                                                                         showlegend=False, hoverinfo='skip' ))
+                                except Exception as e_hull: print(f"Erreur Hull {grp_lbl_hull}: {e_hull}")
+                
+                fig_interactive.update_layout(title_text=f"{y_axis_plot} vs. {x_axis_plot}", title_x=0.5, 
+                                              xaxis_title=x_axis_plot, yaxis_title=y_axis_plot, 
+                                              dragmode='pan', legend_title_text="Groupe" )
                 st.plotly_chart(fig_interactive, use_container_width=True, config={'scrollZoom': True})
         else: st.info("Préparez données et sélectionnez axes pour graphique interactif.")
 elif st.session_state.run_main_processing_once and st.session_state.get('sub', pd.DataFrame()).empty :
@@ -597,9 +659,8 @@ if st.session_state.run_main_processing_once and not st.session_state.get('sub',
             common_species = releve_species_normalized.intersection(syntaxon['species_set'])
             score = len(common_species) 
             if score > 0: 
-                # Stocker name_latin_short pour le graphique, mais utiliser name_latin pour le bouton
                 syntaxon_matches.append({'id': syntaxon['id'], 'name_latin': syntaxon['name_latin'], 
-                                         'name_latin_short': ' '.join(syntaxon['name_latin'].split()[:3]), # Pour le graphique, un peu plus long
+                                         'name_latin_short': ' '.join(syntaxon['name_latin'].split()[:3]), 
                                          'species_set': syntaxon['species_set'], 'common_species_set': common_species, 'score': score})
         sorted_syntaxons = sorted(syntaxon_matches, key=lambda x: (-x['score'], x['name_latin']))
         st.session_state.top_matching_syntaxons = sorted_syntaxons[:5] 
@@ -620,8 +681,7 @@ if st.session_state.run_main_processing_once and not st.session_state.get('sub',
                 with cols_syntaxon_display[i % num_syntaxons_to_show if num_syntaxons_to_show > 0 else 0]:
                     is_syntaxon_selected = matched_syntaxon['id'] in st.session_state.selected_syntaxon_ids
                     button_syntaxon_type = "primary" if is_syntaxon_selected else "secondary"
-                    # Utiliser le nom latin complet pour le bouton, et ajouter le score
-                    button_syntaxon_label = f"{matched_syntaxon['name_latin']} ({matched_syntaxon['score']})"
+                    button_syntaxon_label = f"{matched_syntaxon['name_latin']} ({matched_syntaxon['score']})" # Nom complet pour le bouton
                     
                     st.markdown(f'<div class="syntaxon-select-button">', unsafe_allow_html=True)
                     if st.button(button_syntaxon_label, key=f"syntaxon_select_{matched_syntaxon['id']}", type=button_syntaxon_type, use_container_width=True):
@@ -632,10 +692,7 @@ if st.session_state.run_main_processing_once and not st.session_state.get('sub',
                         selection_changed_in_syntaxons = True
                     st.markdown('</div>', unsafe_allow_html=True)
                     
-                    # Afficher l'ID du syntaxon directement, sans "ID:"
-                    st.markdown(f"**{matched_syntaxon['id']}**") 
-                    # Le nom latin complet est déjà dans le bouton, on peut l'omettre ici ou le garder si souhaité
-                    # st.markdown(f"*{matched_syntaxon['name_latin']}*") 
+                    st.markdown(f"**{matched_syntaxon['id']}**") # ID sans le préfixe "ID:"
                     
                     html_species_list = "<ul>"
                     sorted_syntaxon_species = sorted(list(matched_syntaxon['species_set']), key=lambda sp_name: (sp_name not in matched_syntaxon['common_species_set'], sp_name))
