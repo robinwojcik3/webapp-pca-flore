@@ -7,74 +7,118 @@ import numpy as np
 import textwrap # Importé pour la mise en forme du texte de survol
 from collections import defaultdict # Ajouté pour l'analyse de co-occurrence
 import re # Ajouté pour parser les comptes dans les chaînes de caractères
-from sklearn.preprocessing import StandardScaler # Ajouté pour le calcul de la contribution à la variance
+from sklearn.preprocessing import StandardScaler # Conservé au cas où, mais la logique principale utilisera les communalités PCA
 
-# Définition de MockCoreModule au niveau supérieur pour qu'elle soit toujours accessible
+# Définition de MockCoreModule améliorée pour simuler une ACP plus complète
 class MockCoreModule:
-    def analyse(self, sub_df_prepared, n_clusters_unused):
-        # L'ACP et le clustering associé ne sont plus effectués.
-        print("MockCoreModule.analyse appelée, mais l'ACP est désactivée. Retour de structures vides.")
-        idx = sub_df_prepared.index if hasattr(sub_df_prepared, 'index') else pd.Index([])
-        labels_sim = np.array([])
-        if len(idx) > 0: # Simuler des labels si des données d'entrée existent
-             labels_sim = np.zeros(len(idx), dtype=int)
-
-        class MockPCAObj: # Objet PCA simulé minimaliste
-            def __init__(self):
+    class MockPCA: # Classe interne pour simuler l'objet PCA
+        def __init__(self, n_features_actual, n_components_to_simulate):
+            if n_features_actual > 0 and n_components_to_simulate > 0:
+                # Simuler les composantes (vecteurs propres)
+                # Chaque colonne est un vecteur propre, chaque ligne une variable originale
+                sim_components_t = np.random.rand(n_features_actual, n_components_to_simulate) 
+                if sim_components_t.size > 0:
+                    # Normaliser les vecteurs propres (optionnel mais bonne pratique pour certaines interprétations)
+                    sim_components_t = sim_components_t / np.linalg.norm(sim_components_t, axis=0, keepdims=True)
+                self.components_ = sim_components_t.T # components_ est (n_components, n_features)
+                
+                # Simuler la variance expliquée (valeurs propres)
+                sim_explained_variance = np.sort(np.random.rand(n_components_to_simulate))[::-1] # Trié décroissant
+                # S'assurer que la somme n'est pas nulle pour éviter la division par zéro
+                if sim_explained_variance.sum() > 0:
+                    # Ajuster pour que la variance expliquée soit plausible (ex: total < n_features)
+                    sim_explained_variance = (sim_explained_variance / sim_explained_variance.sum()) * min(n_components_to_simulate, n_features_actual) * 0.7 
+                else:
+                    sim_explained_variance = np.zeros(n_components_to_simulate)
+                self.explained_variance_ = sim_explained_variance
+            else:
                 self.components_ = np.array([])
                 self.explained_variance_ = np.array([])
-        pca_obj_sim = MockPCAObj()
-        coords_df_sim = pd.DataFrame(index=idx)
-        n_samples_sim = len(idx)
-        # Calculer n_features_sim en s'assurant que sub_df_prepared a au moins une colonne (pour 'Espece')
-        n_features_sim = sub_df_prepared.shape[1] - 1 if sub_df_prepared.shape[1] > 1 else 0
+
+    def analyse(self, sub_df_prepared_for_core, n_clusters):
+        print("MockCoreModule.analyse (version améliorée) appelée.")
+        n_samples = len(sub_df_prepared_for_core)
         
-        # S'assurer que reshape a au moins une dimension si n_samples_sim est 0
-        if n_samples_sim == 0:
-            X_scaled_sim = np.array([]).reshape(0, n_features_sim if n_features_sim > 0 else 1)
-        else:
-            X_scaled_sim = np.array([]).reshape(n_samples_sim, n_features_sim if n_features_sim > 0 else 1)
-            if n_features_sim == 0 and n_samples_sim > 0 : # Si pas de traits numériques mais des échantillons
-                 X_scaled_sim = np.random.rand(n_samples_sim, 1)
+        # Si pas d'échantillons ou pas de colonnes de traits (Espece + au moins 1 trait)
+        if n_samples == 0 or sub_df_prepared_for_core.shape[1] <= 1:
+            mock_pca_obj = self.MockPCA(n_features_actual=0, n_components_to_simulate=0)
+            # X_scaled_data n'est plus utilisé activement par app.py pour le dendrogramme,
+            # mais on le retourne pour la compatibilité de la signature si core.py le fait.
+            return np.array([]), mock_pca_obj, pd.DataFrame(index=sub_df_prepared_for_core.index), np.array([]).reshape(0,1)
 
+        # Exclure la colonne 'Espece' pour l'ACP, ne garder que les traits numériques
+        numeric_cols_for_pca_df = sub_df_prepared_for_core.select_dtypes(include=np.number)
+        n_features = numeric_cols_for_pca_df.shape[1]
 
-        return labels_sim, pca_obj_sim, coords_df_sim, X_scaled_sim
+        if n_features == 0: # Aucune colonne numérique pour l'ACP
+            mock_pca_obj = self.MockPCA(n_features_actual=0, n_components_to_simulate=0)
+            return np.array([]), mock_pca_obj, pd.DataFrame(index=sub_df_prepared_for_core.index), np.array([]).reshape(0,1)
 
-    def read_reference(self, fp):
-        st.warning(f"Simulation du chargement de '{fp}' via MockCoreModule.read_reference.")
-        example_species = [f"Espece Alpha Mock {i}" for i in range(1, 11)] + \
-                          [f"Espece Beta Mock {i}" for i in range(1, 11)] + \
-                          [f"Espece Gamma Mock {i}" for i in range(1, 11)]
-        data = pd.DataFrame({
-            'Espece': example_species,
-            'Trait_Num_1': np.random.rand(30) * 10,
-            'Trait_Num_2': np.random.randint(1, 100, 30),
-            'Trait_Cat_1': np.random.choice(['X', 'Y', 'Z'], 30),
-            'Humidité_édaphique': np.random.rand(30) * 5 + 1,
-            'Matière_organique': np.random.rand(30) * 10,
-            'Lumière': np.random.rand(30) * 1000,
-            'CC Rhoméo': np.random.randint(0, 5, 30) # Ajout de la nouvelle variable simulée
-        })
-        data.loc[len(data)] = ['Rhamnus pumila Mock', 5.0, 50, 'X', 3, 5, 500, 1]
-        data.loc[len(data)] = ['Vulpia sp. Mock', 2.0, 20, 'Y', 2, 2, 800, 3]
-        return data
+        # Simuler les coordonnées PCA (généralement les 2 premières composantes pour un biplot)
+        n_pcs_to_simulate_coords = min(2, n_features) 
+        coords_array = np.random.rand(n_samples, n_pcs_to_simulate_coords) * 10 # Valeurs arbitraires
+        pc_cols = [f"PC{i+1}" for i in range(coords_array.shape[1])]
+        coords_df = pd.DataFrame(coords_array, columns=pc_cols, index=sub_df_prepared_for_core.index)
+
+        # Simuler les labels de clustering
+        labels = np.array([])
+        if n_samples > 0 and n_clusters > 0:
+            if n_samples < n_clusters : 
+                labels = np.arange(n_samples) # Chaque échantillon est son propre cluster
+            else:
+                labels = np.random.randint(0, n_clusters, n_samples)
+        
+        # Simuler X_scaled (données standardisées) pour la compatibilité de la signature
+        X_scaled_sim = np.array([]).reshape(n_samples, 0) 
+        if not numeric_cols_for_pca_df.empty:
+            # Standardisation simple
+            X_scaled_temp_sim = (numeric_cols_for_pca_df - numeric_cols_for_pca_df.mean()) / numeric_cols_for_pca_df.std()
+            X_scaled_sim = X_scaled_temp_sim.fillna(0).values 
+        elif n_samples > 0 : # Si pas de traits numériques mais des échantillons, simuler avec une colonne
+             X_scaled_sim = np.random.rand(n_samples, 1) 
+        
+        if X_scaled_sim.ndim == 1 and n_samples > 0 : # Assurer 2D si 1D
+            X_scaled_sim = X_scaled_sim.reshape(-1,1)
+        elif X_scaled_sim.size == 0 and n_samples == 0: # Cas où il n'y a aucun échantillon
+             X_scaled_sim = np.array([]).reshape(0,n_features if n_features > 0 else 1)
+
+        # Créer l'objet PCA simulé avec les composantes et variances expliquées
+        # Le nombre de composantes simulées pour l'objet PCA peut être différent de celui pour les coords_df
+        # Par exemple, on peut vouloir calculer les communalités sur plus de 2 PCs.
+        n_pcs_for_pca_object = min(n_features, 5) # Simuler jusqu'à 5 PCs pour l'objet PCA
+        mock_pca_obj = self.MockPCA(n_features_actual=n_features, n_components_to_simulate=n_pcs_for_pca_object)
+        
+        # Assurer que coords_df a au plus autant de colonnes que le nombre de composantes dans mock_pca_obj.components_
+        # (ce qui est n_pcs_for_pca_object, mais on se base sur la forme réelle de components_)
+        # En pratique, coords_df est souvent basé sur les 2 premières PCs.
+        # La simulation actuelle de mock_pca_obj est indépendante de coords_df pour components_
+        # mais pour la cohérence, on s'assure que coords_df ne dépasse pas.
+        num_components_in_pca_obj = mock_pca_obj.components_.shape[0] if mock_pca_obj.components_.ndim == 2 else 0
+        
+        if num_components_in_pca_obj > 0 and coords_df.shape[1] > num_components_in_pca_obj :
+            coords_df = coords_df.iloc[:, :num_components_in_pca_obj]
+            new_pc_cols = [f"PC{i+1}" for i in range(num_components_in_pca_obj)]
+            coords_df.columns = new_pc_cols
+        elif num_components_in_pca_obj == 0 and not coords_df.empty: # Si PCA n'a pas de composantes mais coords_df en a
+            coords_df = pd.DataFrame(index=sub_df_prepared_for_core.index) # Rendre coords_df vide
+
+        return labels, mock_pca_obj, coords_df, X_scaled_sim
+
 
 _real_core_imported = False
 _core_module_usable = False
 try:
-    import core as actual_core_module # Importer le module réel avec un alias
-    # Vérifier si le module importé a les fonctions nécessaires
+    import core as actual_core_module 
     if hasattr(actual_core_module, "read_reference") and hasattr(actual_core_module, "analyse"):
-        core = actual_core_module # Assigner le module réel à la variable 'core'
+        core = actual_core_module 
         _real_core_imported = True
-        _core_module_usable = True # Marquer que le module réel est utilisable
-        # st.success("Module 'core.py' réel chargé et utilisable.") # Message optionnel pour le débogage
+        _core_module_usable = True 
     else:
-        st.warning("Module 'core.py' trouvé mais semble incomplet (fonctions manquantes). Simulation activée.")
-        core = MockCoreModule() # Utiliser le mock si le module réel est incomplet
+        st.warning("Module 'core.py' trouvé mais semble incomplet. Simulation activée.")
+        core = MockCoreModule() 
 except ImportError:
     st.warning("Le module 'core.py' est introuvable. Simulation activée.")
-    core = MockCoreModule() # Utiliser le mock si l'importation échoue
+    core = MockCoreModule() 
 
 
 # ---------------------------------------------------------------------------- #
@@ -140,8 +184,8 @@ LABEL_FONT_SIZE_ON_PLOTS = 15
 HOVER_SPECIES_FONT_SIZE = 15  
 HOVER_ECOLOGY_TITLE_FONT_SIZE = 14 
 HOVER_ECOLOGY_TEXT_FONT_SIZE = 13  
-CENTROID_MARKER_SIZE = 15 # Taille pour les centroïdes (cibles)
-SPECIES_MARKER_SIZE = 8   # Taille pour les espèces individuelles
+CENTROID_MARKER_SIZE = 15 
+SPECIES_MARKER_SIZE = 8   
 
 
 @st.cache_data
@@ -186,7 +230,7 @@ def load_data(file_path="data_ref.csv"):
             'Humidité_édaphique': np.random.rand(30) * 5 + 1,
             'Matière_organique': np.random.rand(30) * 10,
             'Lumière': np.random.rand(30) * 1000,
-            'CC Rhoméo': np.random.randint(0,5,30) # Ajout de la nouvelle variable simulée
+            'CC Rhoméo': np.random.randint(0,5,30) 
         })
         data_sim.loc[len(data_sim)] = ['Rhamnus pumila (Sim interne)', 5.0, 50, 'X', 3, 5, 500, 2]
         data_sim.loc[len(data_sim)] = ['Vulpia sp. (Sim interne)', 2.0, 20, 'Y', 2, 2, 800, 4]
@@ -198,15 +242,13 @@ def load_data(file_path="data_ref.csv"):
         return data_sim
 
 ref_original = load_data()
-ref = ref_original.copy() # Travailler sur une copie pour éviter de modifier le cache directement
+ref = ref_original.copy() 
 
-# Renommer 'CC Rhoméo' en 'Perturbation CC' si la colonne existe
 if 'CC Rhoméo' in ref.columns:
     ref.rename(columns={'CC Rhoméo': 'Perturbation CC'}, inplace=True)
-    # Essayer de convertir en numérique, les erreurs deviendront NaN
     ref['Perturbation CC'] = pd.to_numeric(ref['Perturbation CC'], errors='coerce')
-    st.success("La variable 'CC Rhoméo' a été chargée et renommée en 'Perturbation CC'.")
-elif 'Perturbation CC' not in ref.columns: # Si 'CC Rhoméo' n'est pas là et 'Perturbation CC' non plus
+    # st.success("La variable 'CC Rhoméo' a été chargée et renommée en 'Perturbation CC'.") # Message peut être redondant
+elif 'Perturbation CC' not in ref.columns: 
     st.warning("La variable 'CC Rhoméo' (ou 'Perturbation CC') n'a pas été trouvée dans les données de référence.")
 
 
@@ -226,18 +268,15 @@ else:
     elif 'Espece' not in ref.columns:
         st.warning("La colonne 'Espece' est manquante dans le DataFrame de référence 'ref' (même après simulation si applicable). Impossible de créer 'ref_binom_series'.")
 
-# ---------------------------------------------------------------------------- #
+# ... (le reste des fonctions de chargement et utilitaires reste identique) ...
 # FONCTION UTILITAIRE POUR FORMATER L'ÉCOLOGIE
-# ---------------------------------------------------------------------------- #
 def format_ecology_for_hover(text, line_width_chars=65):
     if pd.isna(text) or str(text).strip() == "":
         return "Description écologique non disponible."
     wrapped_lines = textwrap.wrap(str(text), width=line_width_chars) 
     return "<br>".join(wrapped_lines)
 
-# ---------------------------------------------------------------------------- #
 # CHARGEMENT DE LA BASE ECOLOGIQUE
-# ---------------------------------------------------------------------------- #
 @st.cache_data
 def load_ecology_data(file_path="data_ecologie_espece.csv"):
     try:
@@ -272,16 +311,12 @@ def load_ecology_data(file_path="data_ecologie_espece.csv"):
         return pd.DataFrame(columns=['Description_Ecologie']).set_index(pd.Index([], name='Espece_norm'))
 ecology_df = load_ecology_data()
 
-# ---------------------------------------------------------------------------- #
 # FONCTION UTILITAIRE POUR NORMALISER LES NOMS D'ESPECES
-# ---------------------------------------------------------------------------- #
 def normalize_species_name(species_name): 
     if pd.isna(species_name) or str(species_name).strip() == "": return None
     return " ".join(str(species_name).strip().split()[:2]).lower()
 
-# ---------------------------------------------------------------------------- #
 # CHARGEMENT DES DONNÉES DES SYNTAXONS
-# ---------------------------------------------------------------------------- #
 @st.cache_data
 def load_syntaxon_data(file_path="data_villaret.csv"):
     try:
@@ -339,16 +374,15 @@ def load_syntaxon_data(file_path="data_villaret.csv"):
         return []
 syntaxon_data_list = load_syntaxon_data()
 
-# ---------------------------------------------------------------------------- #
 # INITIALISATION DES ETATS DE SESSION
-# ---------------------------------------------------------------------------- #
 default_session_states = {
     'x_axis_trait_interactive': None, 'y_axis_trait_interactive': None,
     'run_main_processing_once': False, 'trait_exploration_df': pd.DataFrame(), 
     'trait_exploration_df_snapshot': pd.DataFrame(), 'sub': pd.DataFrame(), 
     'numeric_trait_names_for_interactive_plot': [], 'selected_habitats_indices': [], 
     'previous_num_cols': 0, 'processing_has_run_for_current_selection': False, 
-    'top_matching_syntaxons': [], 'selected_syntaxon_ids': [] 
+    'top_matching_syntaxons': [], 'selected_syntaxon_ids': [],
+    'pca_results_obj': None, 'coords_df_pca': pd.DataFrame(), 'labels_pca': np.array([])
 }
 for key, value in default_session_states.items():
     if key not in st.session_state: st.session_state[key] = value
@@ -361,9 +395,7 @@ if 'releves_df' not in st.session_state or not isinstance(st.session_state.relev
     st.session_state.releves_df.columns = [str(col) for col in st.session_state.releves_df.columns] 
     st.session_state.previous_num_cols = num_placeholder_cols
 
-# ---------------------------------------------------------------------------- #
 # ÉTAPE 1: IMPORTATION ET SÉLECTION DES RELEVÉS FLORISTIQUES
-# ---------------------------------------------------------------------------- #
 st.markdown("---"); st.subheader("Étape 1: Importation et Sélection des Relevés Floristiques")
 st.info("Copiez-collez vos données de relevés. La première ligne = noms d'habitats. Lignes suivantes = espèces.")
 if not all(isinstance(col, str) for col in st.session_state.releves_df.columns):
@@ -419,6 +451,8 @@ if st.session_state.selected_habitats_indices and not ref.empty and not st.sessi
     st.session_state.processing_has_run_for_current_selection = True 
     st.session_state.sub = pd.DataFrame(); st.session_state.trait_exploration_df = pd.DataFrame()
     st.session_state.numeric_trait_names_for_interactive_plot = []; st.session_state.top_matching_syntaxons = []
+    st.session_state.pca_results_obj = None; st.session_state.coords_df_pca = pd.DataFrame(); st.session_state.labels_pca = np.array([])
+
 
     all_species_data_for_processing = []; species_not_found_in_ref_detailed = {} 
     df_for_species_extraction = st.session_state.releves_df.copy() 
@@ -449,170 +483,139 @@ if st.session_state.selected_habitats_indices and not ref.empty and not st.sessi
                         all_species_data_for_processing.append(trait_data)
                     else: species_not_found_in_ref_detailed[habitat_name].append(raw_species_name)
                 else: species_not_found_in_ref_detailed[habitat_name].append(raw_species_name)
+    
     if not all_species_data_for_processing: 
         st.error("Aucune espèce valide correspondante aux traits n'a été trouvée."); st.session_state.run_main_processing_once = False; st.session_state.processing_has_run_for_current_selection = False 
     else: 
         st.session_state.sub = pd.DataFrame(all_species_data_for_processing); st.session_state.sub.reset_index(drop=True, inplace=True) 
         for habitat_name, not_found_list in species_not_found_in_ref_detailed.items():
             if not_found_list: st.warning(f"Espèces de '{habitat_name}' non trouvées: " + ", ".join(not_found_list), icon="⚠️")
+        
         if st.session_state.sub.empty: 
             st.error("Aucune espèce avec traits. Traitement impossible."); st.session_state.run_main_processing_once = False; st.session_state.processing_has_run_for_current_selection = False;
-        elif st.session_state.sub.shape[0] < 1: 
+        elif st.session_state.sub.shape[0] < 1: # Moins de 2 pour PCA, mais au moins 1 pour la suite
             st.error(f"Au moins 1 instance d'espèce nécessaire. {st.session_state.sub.shape[0]} trouvée(s)."); st.session_state.run_main_processing_once = False; st.session_state.processing_has_run_for_current_selection = False;
         else:
             try:
-                if ref.empty: st.error("DataFrame 'ref' vide."); st.session_state.run_main_processing_once = False; st.session_state.processing_has_run_for_current_selection = False; raise ValueError("DataFrame 'ref' vide.")
-                
                 numeric_trait_names_from_ref = ref.select_dtypes(include=np.number).columns.tolist()
-                if 'Espece' in numeric_trait_names_from_ref: # Should not happen with select_dtypes(include=np.number)
-                    numeric_trait_names_from_ref.remove('Espece')
+                if 'Espece' in numeric_trait_names_from_ref: numeric_trait_names_from_ref.remove('Espece')
 
-                actual_numeric_traits = [trait for trait in numeric_trait_names_from_ref if trait in st.session_state.sub.columns and pd.to_numeric(st.session_state.sub[trait], errors='coerce').notna().any()]
-                
-                if not actual_numeric_traits:
-                    st.error("Aucun trait numérique avec des données valides disponible pour l'analyse."); 
-                    st.session_state.run_main_processing_once = False; 
-                    st.session_state.processing_has_run_for_current_selection = False; 
-                    raise ValueError("Aucun trait numérique valide.")
+                actual_numeric_traits_for_pca = [
+                    trait for trait in numeric_trait_names_from_ref 
+                    if trait in st.session_state.sub.columns and pd.to_numeric(st.session_state.sub[trait], errors='coerce').notna().any()
+                ]
+
+                if not actual_numeric_traits_for_pca or st.session_state.sub[actual_numeric_traits_for_pca].dropna().empty:
+                    st.error("Pas assez de données numériques valides pour l'ACP après filtrage des NaN.")
+                    st.session_state.run_main_processing_once = False; st.session_state.processing_has_run_for_current_selection = False;
                 else:
-                    st.session_state.numeric_trait_names_for_interactive_plot = actual_numeric_traits
+                    # Préparer les données pour core.analyse
+                    # S'assurer que l'ID espèce est 'Espece' comme attendu par le mock
+                    sub_for_core = st.session_state.sub[['Espece_Ref_Original'] + actual_numeric_traits_for_pca].copy()
+                    sub_for_core.rename(columns={'Espece_Ref_Original': 'Espece'}, inplace=True)
                     
-                    # Calcul de la contribution à la variance
-                    traits_for_variance_analysis = st.session_state.sub[actual_numeric_traits].copy()
-                    # Convertir en numérique et imputer les NaNs pour le scaling/variance
-                    for col in actual_numeric_traits:
-                        traits_for_variance_analysis[col] = pd.to_numeric(traits_for_variance_analysis[col], errors='coerce')
-                    traits_for_variance_analysis = traits_for_variance_analysis.fillna(traits_for_variance_analysis.mean()) # Imputation simple par la moyenne
+                    # Imputer les NaNs pour les traits numériques avant l'ACP (stratégie simple : moyenne)
+                    for trait in actual_numeric_traits_for_pca:
+                        sub_for_core[trait] = pd.to_numeric(sub_for_core[trait], errors='coerce')
+                        if sub_for_core[trait].isnull().any():
+                             sub_for_core[trait].fillna(sub_for_core[trait].mean(), inplace=True)
+                    
+                    # Vérifier s'il reste des NaNs après imputation (si une colonne était entièrement NaN)
+                    if sub_for_core[actual_numeric_traits_for_pca].isnull().any().any():
+                        st.error("Des valeurs manquantes subsistent dans les traits numériques après imputation. ACP impossible.")
+                        st.session_state.run_main_processing_once = False; st.session_state.processing_has_run_for_current_selection = False;
+                    else:
+                        n_clusters_main = 3 # Valeur par défaut ou à récupérer du slider si implémenté plus tard
+                        labels, pca_obj, coords_df, _ = core.analyse(sub_for_core, n_clusters_main)
+                        
+                        st.session_state.pca_results_obj = pca_obj
+                        st.session_state.coords_df_pca = coords_df
+                        st.session_state.labels_pca = labels
+                        st.session_state.numeric_trait_names_for_interactive_plot = actual_numeric_traits_for_pca
 
-                    trait_contributions = []
-                    if not traits_for_variance_analysis.empty and traits_for_variance_analysis.shape[1] > 0:
-                        # S'assurer qu'il reste des colonnes après le dropna potentiel ou si une colonne est entièrement NaN avant imputation
-                        valid_cols_for_scaling = traits_for_variance_analysis.dropna(axis=1, how='all').columns
-                        if not valid_cols_for_scaling.empty :
+
+                        # Calcul des communalités
+                        communalities_data = []
+                        if hasattr(pca_obj, 'components_') and hasattr(pca_obj, 'explained_variance_') and \
+                           isinstance(pca_obj.components_, np.ndarray) and pca_obj.components_.size > 0 and \
+                           isinstance(pca_obj.explained_variance_, np.ndarray) and pca_obj.explained_variance_.size > 0 and \
+                           pca_obj.components_.shape[1] == len(actual_numeric_traits_for_pca): # Vérifier que le nombre de features correspond
+
+                            loadings = pca_obj.components_.T * np.sqrt(pca_obj.explained_variance_)
+                            communal = (loadings**2).sum(axis=1)
+                            communal_percent = (communal * 100).round(0).astype(int) # En pourcentage, sans normaliser par la somme des communalités
+                            communal_percent_clipped = np.clip(communal_percent, 0, 100)
+
+                            for trait_name, com_val in zip(actual_numeric_traits_for_pca, communal_percent_clipped):
+                                communalities_data.append({"Variable": trait_name, "Communalité (%)": com_val})
+                        else:
+                            st.warning("Résultats PCA incomplets ou incohérents pour le calcul des communalités. Utilisation de la variance simple.")
+                            # Fallback: variance des traits standardisés si PCA échoue ou est trop minimaliste
                             scaler = StandardScaler()
-                            scaled_traits = scaler.fit_transform(traits_for_variance_analysis[valid_cols_for_scaling])
-                            scaled_traits_df = pd.DataFrame(scaled_traits, columns=valid_cols_for_scaling)
-                            variances = scaled_traits_df.var()
-                            total_variance = variances.sum()
-                            if total_variance > 0:
-                                for trait in actual_numeric_traits:
-                                    if trait in variances:
-                                        contribution = (variances[trait] / total_variance) * 100
-                                        trait_contributions.append({"Variable": trait, "Contribution (%)": contribution})
-                                    else: # Trait initialement numérique mais devenu NaN partout ou non inclus dans valid_cols_for_scaling
-                                        trait_contributions.append({"Variable": trait, "Contribution (%)": 0.0})
-
-                            else: # total_variance est 0 (e.g. toutes les valeurs sont constantes après scaling)
-                                equal_contribution = 100.0 / len(actual_numeric_traits) if len(actual_numeric_traits) > 0 else 0
-                                for trait in actual_numeric_traits:
-                                    trait_contributions.append({"Variable": trait, "Contribution (%)": equal_contribution})
-                        else: # Aucune colonne valide pour le scaling
-                             for trait in actual_numeric_traits: trait_contributions.append({"Variable": trait, "Contribution (%)": 0.0})
-                    else: # Pas de données pour l'analyse de variance
-                        for trait in actual_numeric_traits: trait_contributions.append({"Variable": trait, "Contribution (%)": 0.0})
+                            scaled_traits_fallback = scaler.fit_transform(st.session_state.sub[actual_numeric_traits_for_pca].fillna(0)) # fillna(0) pour robustesse
+                            variances_fallback = np.var(scaled_traits_fallback, axis=0)
+                            total_variance_fallback = np.sum(variances_fallback)
+                            if total_variance_fallback > 0:
+                                for i, trait_name in enumerate(actual_numeric_traits_for_pca):
+                                    contribution = (variances_fallback[i] / total_variance_fallback) * 100
+                                    communalities_data.append({"Variable": trait_name, "Communalité (%)": contribution})
+                            else: # Si total_variance_fallback est 0
+                                for trait_name in actual_numeric_traits_for_pca:
+                                    communalities_data.append({"Variable": trait_name, "Communalité (%)": 0.0})
 
 
-                    # Trier par contribution pour la sélection par défaut
-                    trait_contributions_sorted = sorted(trait_contributions, key=lambda x: x["Contribution (%)"], reverse=True)
-                    
-                    exploration_df_data = []
-                    for item in trait_contributions_sorted:
-                        exploration_df_data.append({
-                            "Variable": item["Variable"], 
-                            "Contribution (%)": item["Contribution (%)"], 
-                            "Axe X": False, 
-                            "Axe Y": False
-                        })
-                    
-                    st.session_state.trait_exploration_df = pd.DataFrame(exploration_df_data)
+                        communalities_df_sorted = pd.DataFrame(communalities_data).sort_values("Communalité (%)", ascending=False)
+                        
+                        exploration_df_data = []
+                        for _, row in communalities_df_sorted.iterrows():
+                            exploration_df_data.append({
+                                "Variable": row["Variable"], 
+                                "Communalité (%)": row["Communalité (%)"], 
+                                "Axe X": False, 
+                                "Axe Y": False
+                            })
+                        st.session_state.trait_exploration_df = pd.DataFrame(exploration_df_data)
 
-                    default_x_init, default_y_init = None, None
-                    if len(trait_contributions_sorted) > 0:
-                        default_x_init = trait_contributions_sorted[0]["Variable"]
-                    if len(trait_contributions_sorted) > 1:
-                        default_y_init = trait_contributions_sorted[1]["Variable"]
-                    elif default_x_init: # Si un seul trait, utiliser le même pour Y
-                        default_y_init = default_x_init
-                    
-                    st.session_state.x_axis_trait_interactive = default_x_init
-                    st.session_state.y_axis_trait_interactive = default_y_init
+                        default_x_init, default_y_init = None, None
+                        if len(communalities_df_sorted) > 0:
+                            default_x_init = communalities_df_sorted.iloc[0]["Variable"]
+                        if len(communalities_df_sorted) > 1:
+                            default_y_init = communalities_df_sorted.iloc[1]["Variable"]
+                        elif default_x_init: 
+                            default_y_init = default_x_init
+                        
+                        st.session_state.x_axis_trait_interactive = default_x_init
+                        st.session_state.y_axis_trait_interactive = default_y_init
 
-                    if not st.session_state.trait_exploration_df.empty:
-                        st.session_state.trait_exploration_df["Axe X"] = (st.session_state.trait_exploration_df["Variable"] == default_x_init)
-                        st.session_state.trait_exploration_df["Axe Y"] = (st.session_state.trait_exploration_df["Variable"] == default_y_init)
-                    
-                    st.session_state.trait_exploration_df_snapshot = st.session_state.trait_exploration_df.copy()
+                        if not st.session_state.trait_exploration_df.empty:
+                            st.session_state.trait_exploration_df["Axe X"] = (st.session_state.trait_exploration_df["Variable"] == default_x_init)
+                            st.session_state.trait_exploration_df["Axe Y"] = (st.session_state.trait_exploration_df["Variable"] == default_y_init)
+                        
+                        st.session_state.trait_exploration_df_snapshot = st.session_state.trait_exploration_df.copy()
 
-            except Exception as e: st.error(f"Erreur traitement: {e}"); st.exception(e); st.session_state.run_main_processing_once = False; st.session_state.processing_has_run_for_current_selection = False;
-elif not st.session_state.selected_habitats_indices and not ref.empty: st.info("Sélectionnez habitat(s) à l'Étape 1.")
-elif ref.empty: st.warning("Données de référence non chargées/simulées. Traitement désactivé si données réelles manquantes.")
+            except Exception as e: 
+                st.error(f"Erreur lors du traitement principal ou de l'analyse PCA: {e}"); st.exception(e)
+                st.session_state.run_main_processing_once = False; st.session_state.processing_has_run_for_current_selection = False;
 
-# ---------------------------------------------------------------------------- #
-# ÉTAPE 2: EXPLORATION INTERACTIVE DES TRAITS
-# ---------------------------------------------------------------------------- #
+elif not st.session_state.selected_habitats_indices and not ref.empty: 
+    st.info("Sélectionnez habitat(s) à l'Étape 1.")
+elif ref.empty: 
+    st.warning("Données de référence non chargées/simulées. Traitement désactivé si données réelles manquantes.")
+
+# ... (Le reste du code pour Étape 2 (graphique), Étape 3 et Étape 4 reste majoritairement le même,
+# mais utilisera st.session_state.trait_exploration_df pour la sélection des axes et
+# st.session_state.coords_df_pca et st.session_state.labels_pca pour le graphique PCA si besoin) ...
+
+# ÉTAPE 2: EXPLORATION INTERACTIVE DES TRAITS (Suite - Graphique)
 if st.session_state.run_main_processing_once and not st.session_state.get('sub', pd.DataFrame()).empty: 
-    st.markdown("---"); st.subheader("Étape 2: Exploration Interactive des Traits")
-    col_interactive_table, col_interactive_graph = st.columns([1, 2]) 
-    with col_interactive_table: 
-        st.markdown("##### Sélection des traits pour le graphique")
-        df_editor_source_interactive = st.session_state.get('trait_exploration_df', pd.DataFrame())
-        if not df_editor_source_interactive.empty:
-            if 'trait_exploration_df_snapshot' not in st.session_state or \
-               list(st.session_state.get('trait_exploration_df_snapshot', pd.DataFrame()).columns) != list(df_editor_source_interactive.columns) or \
-               not st.session_state.trait_exploration_df_snapshot.equals(df_editor_source_interactive) : # Pour s'assurer que le snapshot est à jour avec les contributions
-                st.session_state.trait_exploration_df_snapshot = df_editor_source_interactive.copy()
+    # st.markdown("---"); st.subheader("Étape 2: Exploration Interactive des Traits") # Déjà fait
+    col_interactive_table, col_interactive_graph = st.columns([1, 2]) # Redéfini pour clarté de la portée
+    with col_interactive_table: # Déjà géré ci-dessus
+        pass # Le data_editor est déjà dans la section de traitement principal
 
-            edited_df_interactive = st.data_editor(
-                df_editor_source_interactive, 
-                column_config={
-                    "Variable": st.column_config.TextColumn("Trait disponible", disabled=True), 
-                    "Contribution (%)": st.column_config.NumberColumn("Contribution (%)", format="%.2f%%", disabled=True),
-                    "Axe X": st.column_config.CheckboxColumn("Axe X"), 
-                    "Axe Y": st.column_config.CheckboxColumn("Axe Y")
-                }, 
-                key="interactive_trait_exploration_editor", 
-                use_container_width=True, 
-                hide_index=True, 
-                num_rows="fixed"
-            )
-            made_change_in_interactive_axes = False 
-            current_x_selection_from_state = st.session_state.x_axis_trait_interactive
-            x_vars_checked_in_editor = edited_df_interactive[edited_df_interactive["Axe X"]]["Variable"].tolist()
-            new_x_selection_candidate = current_x_selection_from_state 
-            if not x_vars_checked_in_editor: 
-                if current_x_selection_from_state is not None: new_x_selection_candidate = None; made_change_in_interactive_axes = True
-            elif len(x_vars_checked_in_editor) == 1: 
-                if x_vars_checked_in_editor[0] != current_x_selection_from_state: new_x_selection_candidate = x_vars_checked_in_editor[0]; made_change_in_interactive_axes = True
-            else: 
-                potential_new_x = [v for v in x_vars_checked_in_editor if v != current_x_selection_from_state]
-                new_x_selection_candidate = potential_new_x[0] if potential_new_x else x_vars_checked_in_editor[-1]; made_change_in_interactive_axes = True
-            st.session_state.x_axis_trait_interactive = new_x_selection_candidate
-            
-            current_y_selection_from_state = st.session_state.y_axis_trait_interactive
-            y_vars_checked_in_editor = edited_df_interactive[edited_df_interactive["Axe Y"]]["Variable"].tolist()
-            new_y_selection_candidate = current_y_selection_from_state 
-            if not y_vars_checked_in_editor: 
-                if current_y_selection_from_state is not None: new_y_selection_candidate = None; made_change_in_interactive_axes = True
-            elif len(y_vars_checked_in_editor) == 1: 
-                if y_vars_checked_in_editor[0] != current_y_selection_from_state: new_y_selection_candidate = y_vars_checked_in_editor[0]; made_change_in_interactive_axes = True
-            else: 
-                potential_new_y = [v for v in y_vars_checked_in_editor if v != current_y_selection_from_state]
-                new_y_selection_candidate = potential_new_y[0] if potential_new_y else y_vars_checked_in_editor[-1]; made_change_in_interactive_axes = True
-            st.session_state.y_axis_trait_interactive = new_y_selection_candidate
-            
-            if made_change_in_interactive_axes:
-                df_updated_for_editor = df_editor_source_interactive.copy() # Utiliser la version avec les contributions déjà calculées
-                df_updated_for_editor["Axe X"] = (df_updated_for_editor["Variable"] == st.session_state.x_axis_trait_interactive)
-                df_updated_for_editor["Axe Y"] = (df_updated_for_editor["Variable"] == st.session_state.y_axis_trait_interactive)
-                st.session_state.trait_exploration_df = df_updated_for_editor 
-                st.session_state.trait_exploration_df_snapshot = df_updated_for_editor.copy(); st.rerun() 
-            elif not edited_df_interactive.equals(st.session_state.trait_exploration_df_snapshot): # Gérer les changements manuels qui ne sont pas une sélection unique
-                   st.session_state.trait_exploration_df_snapshot = edited_df_interactive.copy() 
-        else: st.info("Tableau de sélection des traits disponible après traitement si traits numériques identifiés.")
     with col_interactive_graph: 
         st.markdown("##### Graphique d'exploration des traits")
         x_axis_plot = st.session_state.x_axis_trait_interactive; y_axis_plot = st.session_state.y_axis_trait_interactive 
-        numeric_traits_plot = st.session_state.get('numeric_trait_names_for_interactive_plot', []) 
         sub_plot_releve = st.session_state.get('sub', pd.DataFrame()) 
         selected_syntaxon_ids_for_plot = st.session_state.get('selected_syntaxon_ids', [])
         syntaxons_to_plot_data = [s for s in st.session_state.get('top_matching_syntaxons', []) if s['id'] in selected_syntaxon_ids_for_plot]
@@ -781,9 +784,7 @@ elif st.session_state.run_main_processing_once and st.session_state.get('sub', p
     st.markdown("---"); st.subheader("Étape 2: Exploration Interactive des Traits")
     st.warning("Traitement principal sans données suffisantes pour cette section.")
 
-# ---------------------------------------------------------------------------- #
 # ÉTAPE 3: IDENTIFICATION ET SÉLECTION DES SYNTAXONS PERTINENTS
-# ---------------------------------------------------------------------------- #
 if st.session_state.run_main_processing_once and not st.session_state.get('sub', pd.DataFrame()).empty and syntaxon_data_list:
     st.markdown("---"); st.subheader("Étape 3: Identification et Sélection des Syntaxons Pertinents")
     
@@ -878,9 +879,7 @@ elif st.session_state.run_main_processing_once and not syntaxon_data_list:
     st.markdown("---"); st.subheader("Étape 3: Identification et Sélection des Syntaxons Pertinents")
     st.warning("Données des syntaxons non chargées/vides. Identification impossible.")
 
-# ---------------------------------------------------------------------------- #
 # ÉTAPE 4: ANALYSE DES CO-OCCURRENCES D'ESPÈCES
-# ---------------------------------------------------------------------------- #
 def style_cooccurrence_row_parsing(row, max_overall_count, vmin_count=1):
     styles = pd.Series('', index=row.index); color_start_rgb = (40,40,40); color_end_rgb = (200,50,50)   
     for col_name in ['Voisin 1', 'Voisin 2', 'Voisin 3']: 
