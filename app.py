@@ -302,7 +302,7 @@ default_session_states = {
     'trait_exploration_df_snapshot': pd.DataFrame(), 'sub': pd.DataFrame(), 
     'numeric_trait_names_for_interactive_plot': [], 'selected_habitats_indices': [], 
     'previous_num_cols': 0, 'processing_has_run_for_current_selection': False, 
-    'top_matching_syntaxons': [], 'selected_syntaxon_ids': [] # Ajout pour les syntaxons sélectionnés
+    'top_matching_syntaxons': [], 'selected_syntaxon_ids': [] 
 }
 for key, value in default_session_states.items():
     if key not in st.session_state: st.session_state[key] = value
@@ -331,7 +331,7 @@ if not edited_releves_df_from_editor.equals(st.session_state.releves_df):
         if not st.session_state.selected_habitats_indices: 
             st.session_state.processing_has_run_for_current_selection = False
             st.session_state.run_main_processing_once = False 
-            st.session_state.selected_syntaxon_ids = [] # Réinitialiser les syntaxons sélectionnés aussi
+            st.session_state.selected_syntaxon_ids = [] 
         st.session_state.previous_num_cols = len(st.session_state.releves_df.columns) 
     st.rerun() 
 current_releves_df_for_selection = st.session_state.releves_df.copy() 
@@ -360,7 +360,7 @@ if not current_releves_df_for_selection.empty and len(current_releves_df_for_sel
                     else: st.session_state.selected_habitats_indices.append(col_idx) 
                     st.session_state.run_main_processing_once = False 
                     st.session_state.processing_has_run_for_current_selection = False 
-                    st.session_state.selected_syntaxon_ids = [] # Réinitialiser les syntaxons sélectionnés
+                    st.session_state.selected_syntaxon_ids = [] 
                     st.rerun() 
                 st.markdown('</div>', unsafe_allow_html=True)
     elif num_actual_cols > 0 : st.info("Aucune colonne ne contient de données d'espèces pour la sélection.")
@@ -373,7 +373,6 @@ if st.session_state.selected_habitats_indices and not ref.empty and not st.sessi
     st.session_state.processing_has_run_for_current_selection = True 
     st.session_state.sub = pd.DataFrame(); st.session_state.trait_exploration_df = pd.DataFrame()
     st.session_state.numeric_trait_names_for_interactive_plot = []; st.session_state.top_matching_syntaxons = []
-    # st.session_state.selected_syntaxon_ids = [] # Déjà réinitialisé si sélection habitat change
 
     all_species_data_for_processing = []; species_not_found_in_ref_detailed = {} 
     df_for_species_extraction = st.session_state.releves_df.copy() 
@@ -446,16 +445,13 @@ if st.session_state.run_main_processing_once and not st.session_state.get('sub',
         st.markdown("##### Sélection des traits pour le graphique")
         df_editor_source_interactive = st.session_state.get('trait_exploration_df', pd.DataFrame())
         if not df_editor_source_interactive.empty:
-            # Snapshot management
             if 'trait_exploration_df_snapshot' not in st.session_state or \
                list(st.session_state.get('trait_exploration_df_snapshot', pd.DataFrame()).columns) != list(df_editor_source_interactive.columns):
                 st.session_state.trait_exploration_df_snapshot = df_editor_source_interactive.copy()
-            
             edited_df_interactive = st.data_editor(df_editor_source_interactive, 
                 column_config={"Variable": st.column_config.TextColumn("Trait disponible", disabled=True), "Axe X": st.column_config.CheckboxColumn("Axe X"), "Axe Y": st.column_config.CheckboxColumn("Axe Y") }, 
                 key="interactive_trait_exploration_editor", use_container_width=True, hide_index=True, num_rows="fixed" )
             made_change_in_interactive_axes = False 
-            # Axe X logic
             current_x_selection_from_state = st.session_state.x_axis_trait_interactive
             x_vars_checked_in_editor = edited_df_interactive[edited_df_interactive["Axe X"]]["Variable"].tolist()
             new_x_selection_candidate = current_x_selection_from_state 
@@ -467,7 +463,6 @@ if st.session_state.run_main_processing_once and not st.session_state.get('sub',
                 potential_new_x = [v for v in x_vars_checked_in_editor if v != current_x_selection_from_state]
                 new_x_selection_candidate = potential_new_x[0] if potential_new_x else x_vars_checked_in_editor[-1]; made_change_in_interactive_axes = True
             st.session_state.x_axis_trait_interactive = new_x_selection_candidate
-            # Axe Y logic
             current_y_selection_from_state = st.session_state.y_axis_trait_interactive
             y_vars_checked_in_editor = edited_df_interactive[edited_df_interactive["Axe Y"]]["Variable"].tolist()
             new_y_selection_candidate = current_y_selection_from_state 
@@ -493,12 +488,8 @@ if st.session_state.run_main_processing_once and not st.session_state.get('sub',
         x_axis_plot = st.session_state.x_axis_trait_interactive; y_axis_plot = st.session_state.y_axis_trait_interactive 
         numeric_traits_plot = st.session_state.get('numeric_trait_names_for_interactive_plot', []) 
         sub_plot_releve = st.session_state.get('sub', pd.DataFrame()) 
-        
-        # Utiliser les syntaxons sélectionnés par l'utilisateur
         selected_syntaxon_ids_for_plot = st.session_state.get('selected_syntaxon_ids', [])
-        # Filtrer top_matching_syntaxons pour ne garder que ceux sélectionnés
         syntaxons_to_plot_data = [s for s in st.session_state.get('top_matching_syntaxons', []) if s['id'] in selected_syntaxon_ids_for_plot]
-
         all_plot_data_list = []
         if not sub_plot_releve.empty and x_axis_plot and y_axis_plot and x_axis_plot in sub_plot_releve.columns and y_axis_plot in sub_plot_releve.columns:
             required_cols_releve = ['Espece_User_Input_Raw', 'Ecologie', 'Source_Habitat']
@@ -507,9 +498,8 @@ if st.session_state.run_main_processing_once and not st.session_state.get('sub',
                 releve_plot_df['Source_Donnee'] = 'Relevé Utilisateur'; releve_plot_df['Nom_Affichage'] = releve_plot_df['Espece_User_Input_Raw']
                 releve_plot_df['Groupe_Affichage'] = releve_plot_df['Source_Habitat']; releve_plot_df['Symbole'] = 'circle'
                 all_plot_data_list.append(releve_plot_df)
-        
         if syntaxons_to_plot_data and not ref.empty and 'Espece' in ref.columns and x_axis_plot and y_axis_plot:
-            for i, syntaxon_info in enumerate(syntaxons_to_plot_data): # Utiliser les syntaxons filtrés
+            for i, syntaxon_info in enumerate(syntaxons_to_plot_data): 
                 syntaxon_name_for_graph = syntaxon_info.get('name_latin_short', f"Syntaxon {syntaxon_info.get('id', i+1)}")
                 species_to_plot_from_syntaxon = []
                 for species_norm in syntaxon_info.get('species_set', []):
@@ -525,16 +515,14 @@ if st.session_state.run_main_processing_once and not st.session_state.get('sub',
                                 'Nom_Affichage': ref.loc[ref_idx, 'Espece'], 'Groupe_Affichage': f"Syntaxon: {syntaxon_name_for_graph}",
                                 'Symbole': 'triangle-up' })
                 if species_to_plot_from_syntaxon: all_plot_data_list.append(pd.DataFrame(species_to_plot_from_syntaxon))
-        
         if all_plot_data_list:
             final_plot_df = pd.concat(all_plot_data_list, ignore_index=True)
             if not numeric_traits_plot: st.warning("Aucun trait numérique trouvé.")
             elif not x_axis_plot or not y_axis_plot: st.info("Sélectionnez traits pour Axe X et Y.")
             elif x_axis_plot not in numeric_traits_plot or y_axis_plot not in numeric_traits_plot: st.warning("Traits sélectionnés non valides.")
             elif final_plot_df.empty or x_axis_plot not in final_plot_df.columns or y_axis_plot not in final_plot_df.columns: st.warning("Données de graphique non prêtes/incohérentes.")
-            else: # Plotting logic (jitter, figure creation, hulls)
+            else: 
                 plot_data_to_use = final_plot_df.copy()
-                # Jitter
                 temp_x_col_grp = "_temp_x"; temp_y_col_grp = "_temp_y"
                 plot_data_to_use[temp_x_col_grp] = plot_data_to_use[x_axis_plot]; plot_data_to_use[temp_y_col_grp] = plot_data_to_use[y_axis_plot]
                 duplicates_mask = plot_data_to_use.duplicated(subset=[temp_x_col_grp, temp_y_col_grp], keep=False)
@@ -556,16 +544,24 @@ if st.session_state.run_main_processing_once and not st.session_state.get('sub',
                                 plot_data_to_use.loc[idx_jitter, x_axis_plot] += jitter_x_val * np.cos(angle)
                                 plot_data_to_use.loc[idx_jitter, y_axis_plot] += jitter_y_val * np.sin(angle)
                 plot_data_to_use.drop(columns=[temp_x_col_grp, temp_y_col_grp], inplace=True)
-                # Figure
                 fig_interactive = px.scatter(plot_data_to_use, x=x_axis_plot, y=y_axis_plot, color="Groupe_Affichage", symbol='Symbole', 
                     text="Nom_Affichage", hover_name="Nom_Affichage", custom_data=["Nom_Affichage", "Ecologie", "Source_Habitat", "Source_Donnee"], 
                     template="plotly_dark", height=600, color_discrete_sequence=COLOR_SEQUENCE)
                 fig_interactive.update_traces(textposition="top center", marker=dict(opacity=0.8, size=8), textfont=dict(size=LABEL_FONT_SIZE_ON_PLOTS), 
                     hovertemplate=(f"<span style='font-size: {HOVER_SPECIES_FONT_SIZE}px;'><b>%{{customdata[0]}}</b></span><br>Source: %{{customdata[3]}}<br>Habitat/Syntaxon: %{{customdata[2]}}<br><br><span style='font-size: {HOVER_ECOLOGY_TITLE_FONT_SIZE}px;'><i>Écologie:</i></span><br><span style='font-size: {HOVER_ECOLOGY_TEXT_FONT_SIZE}px;'>%{{customdata[1]}}</span><extra></extra>" ))
-                # Hulls
                 unique_groups_fig = sorted(plot_data_to_use["Groupe_Affichage"].unique())
-                extended_colors = COLOR_SEQUENCE * (len(unique_groups_fig) // len(COLOR_SEQUENCE) + 1)
-                group_colors = {lbl: extended_colors[i % len(extended_colors)] for i, lbl in enumerate(unique_groups_fig)}
+                # Créer une map de couleurs pour les groupes afin de la réutiliser pour les enveloppes
+                # S'assurer que la séquence de couleurs est assez longue
+                extended_color_sequence_fig = COLOR_SEQUENCE * (len(unique_groups_fig) // len(COLOR_SEQUENCE) + 1)
+                group_color_map_fig = {
+                    group_label: extended_color_sequence_fig[i % len(extended_color_sequence_fig)]
+                    for i, group_label in enumerate(unique_groups_fig)
+                }
+                # Appliquer les couleurs aux traces existantes pour s'assurer de la cohérence
+                for trace in fig_interactive.data:
+                    if trace.name in group_color_map_fig:
+                        trace.marker.color = group_color_map_fig[trace.name]
+
                 for grp_lbl in unique_groups_fig: 
                     grp_df = plot_data_to_use[plot_data_to_use["Groupe_Affichage"] == grp_lbl]
                     if x_axis_plot in grp_df and y_axis_plot in grp_df:
@@ -573,9 +569,13 @@ if st.session_state.run_main_processing_once and not st.session_state.get('sub',
                         if len(hull_pts) >= MIN_POINTS_FOR_HULL: 
                             try:
                                 hull = ConvexHull(hull_pts); hull_path_data = hull_pts[np.append(hull.vertices, hull.vertices[0])]
-                                hull_clr = group_colors.get(grp_lbl, COLOR_SEQUENCE[0]) 
-                                fig_interactive.add_trace(go.Scatter(x=hull_path_data[:, 0], y=hull_path_data[:, 1], fill="toself", fillcolor=hull_clr, 
-                                    line=dict(color=hull_clr, width=1.5), mode='lines', name=f'{grp_lbl} Hull', opacity=0.2, showlegend=False, hoverinfo='skip' ))
+                                # Utiliser la couleur du groupe pour l'enveloppe
+                                hull_clr = group_color_map_fig.get(grp_lbl, COLOR_SEQUENCE[0]) # Fallback sur la première couleur
+                                fig_interactive.add_trace(go.Scatter(x=hull_path_data[:, 0], y=hull_path_data[:, 1], 
+                                                                     fill="toself", fillcolor=hull_clr, # Couleur de remplissage
+                                                                     line=dict(color=hull_clr, width=1.5), # Couleur de la ligne
+                                                                     mode='lines', name=f'{grp_lbl} Hull', opacity=0.2, 
+                                                                     showlegend=False, hoverinfo='skip' ))
                             except Exception as e_hull: print(f"Erreur Hull {grp_lbl}: {e_hull}")
                 fig_interactive.update_layout(title_text=f"{y_axis_plot} vs. {x_axis_plot}", title_x=0.5, xaxis_title=x_axis_plot, yaxis_title=y_axis_plot, dragmode='pan', legend_title_text="Groupe" )
                 st.plotly_chart(fig_interactive, use_container_width=True, config={'scrollZoom': True})
@@ -597,18 +597,18 @@ if st.session_state.run_main_processing_once and not st.session_state.get('sub',
             common_species = releve_species_normalized.intersection(syntaxon['species_set'])
             score = len(common_species) 
             if score > 0: 
+                # Stocker name_latin_short pour le graphique, mais utiliser name_latin pour le bouton
                 syntaxon_matches.append({'id': syntaxon['id'], 'name_latin': syntaxon['name_latin'], 
-                                         'name_latin_short': ' '.join(syntaxon['name_latin'].split()[:2]), 
+                                         'name_latin_short': ' '.join(syntaxon['name_latin'].split()[:3]), # Pour le graphique, un peu plus long
                                          'species_set': syntaxon['species_set'], 'common_species_set': common_species, 'score': score})
         sorted_syntaxons = sorted(syntaxon_matches, key=lambda x: (-x['score'], x['name_latin']))
-        st.session_state.top_matching_syntaxons = sorted_syntaxons[:5] # Conserver les 5 meilleurs pour affichage/sélection
+        st.session_state.top_matching_syntaxons = sorted_syntaxons[:5] 
 
         if not st.session_state.top_matching_syntaxons: st.info("Aucun syntaxon correspondant trouvé.")
         else:
             st.markdown(f"Cliquez sur un syntaxon pour le sélectionner/désélectionner pour le graphique de l'Étape 2.")
             st.markdown(f"Les **{len(st.session_state.top_matching_syntaxons)} syntaxons les plus probables** sont :")
             
-            # S'assurer que selected_syntaxon_ids ne contient que des IDs valides parmi les top_matching_syntaxons actuels
             valid_top_syntaxon_ids = {s['id'] for s in st.session_state.top_matching_syntaxons}
             st.session_state.selected_syntaxon_ids = [sid for sid in st.session_state.selected_syntaxon_ids if sid in valid_top_syntaxon_ids]
 
@@ -620,7 +620,8 @@ if st.session_state.run_main_processing_once and not st.session_state.get('sub',
                 with cols_syntaxon_display[i % num_syntaxons_to_show if num_syntaxons_to_show > 0 else 0]:
                     is_syntaxon_selected = matched_syntaxon['id'] in st.session_state.selected_syntaxon_ids
                     button_syntaxon_type = "primary" if is_syntaxon_selected else "secondary"
-                    button_syntaxon_label = f"{matched_syntaxon.get('name_latin_short', matched_syntaxon['id'])} ({matched_syntaxon['score']})"
+                    # Utiliser le nom latin complet pour le bouton, et ajouter le score
+                    button_syntaxon_label = f"{matched_syntaxon['name_latin']} ({matched_syntaxon['score']})"
                     
                     st.markdown(f'<div class="syntaxon-select-button">', unsafe_allow_html=True)
                     if st.button(button_syntaxon_label, key=f"syntaxon_select_{matched_syntaxon['id']}", type=button_syntaxon_type, use_container_width=True):
@@ -631,9 +632,10 @@ if st.session_state.run_main_processing_once and not st.session_state.get('sub',
                         selection_changed_in_syntaxons = True
                     st.markdown('</div>', unsafe_allow_html=True)
                     
-                    st.markdown(f"**ID: {matched_syntaxon['id']}**")
-                    st.markdown(f"*{matched_syntaxon['name_latin']}*")
-                    # st.markdown(f"Score: {matched_syntaxon['score']} espèces communes") # Déjà dans le bouton
+                    # Afficher l'ID du syntaxon directement, sans "ID:"
+                    st.markdown(f"**{matched_syntaxon['id']}**") 
+                    # Le nom latin complet est déjà dans le bouton, on peut l'omettre ici ou le garder si souhaité
+                    # st.markdown(f"*{matched_syntaxon['name_latin']}*") 
                     
                     html_species_list = "<ul>"
                     sorted_syntaxon_species = sorted(list(matched_syntaxon['species_set']), key=lambda sp_name: (sp_name not in matched_syntaxon['common_species_set'], sp_name))
@@ -713,4 +715,3 @@ if st.session_state.run_main_processing_once and not st.session_state.get('sub',
 elif st.session_state.run_main_processing_once and not syntaxon_data_list:
     st.markdown("---"); st.subheader("Étape 4: Analyse des Co-occurrences d'Espèces")
     st.warning("Données des syntaxons non chargées/vides. Analyse de co-occurrence impossible.")
-
