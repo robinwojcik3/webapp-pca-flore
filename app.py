@@ -136,8 +136,8 @@ LABEL_FONT_SIZE_ON_PLOTS = 15
 HOVER_SPECIES_FONT_SIZE = 15  
 HOVER_ECOLOGY_TITLE_FONT_SIZE = 14 
 HOVER_ECOLOGY_TEXT_FONT_SIZE = 13  
-CENTROID_MARKER_SIZE = 15
-SPECIES_MARKER_SIZE = 8
+CENTROID_MARKER_SIZE = 15 # Taille pour les centroïdes (cibles)
+SPECIES_MARKER_SIZE = 8   # Taille pour les espèces individuelles
 
 
 @st.cache_data
@@ -494,13 +494,9 @@ if st.session_state.run_main_processing_once and not st.session_state.get('sub',
         selected_syntaxon_ids_for_plot = st.session_state.get('selected_syntaxon_ids', [])
         syntaxons_to_plot_data = [s for s in st.session_state.get('top_matching_syntaxons', []) if s['id'] in selected_syntaxon_ids_for_plot]
         
-        # Initialiser la liste pour toutes les données à tracer (espèces + centroïdes)
         all_plot_data_list = []
-        
-        # DataFrame pour les espèces (avant ajout des centroïdes)
         species_plot_data_list = []
 
-        # 1. Préparer les données des espèces du relevé utilisateur
         if not sub_plot_releve.empty and x_axis_plot and y_axis_plot and \
            x_axis_plot in sub_plot_releve.columns and y_axis_plot in sub_plot_releve.columns:
             required_cols_releve = ['Espece_User_Input_Raw', 'Ecologie', 'Source_Habitat']
@@ -510,10 +506,9 @@ if st.session_state.run_main_processing_once and not st.session_state.get('sub',
                 releve_plot_df_species['Nom_Affichage'] = releve_plot_df_species['Espece_User_Input_Raw']
                 releve_plot_df_species['Groupe_Affichage'] = releve_plot_df_species['Source_Habitat'] 
                 releve_plot_df_species['Symbole'] = 'circle'
-                releve_plot_df_species['marker_size'] = SPECIES_MARKER_SIZE # Taille pour les espèces
+                releve_plot_df_species['marker_size'] = SPECIES_MARKER_SIZE
                 species_plot_data_list.append(releve_plot_df_species)
 
-        # 2. Préparer les données des espèces des syntaxons sélectionnés
         if syntaxons_to_plot_data and not ref.empty and 'Espece' in ref.columns and x_axis_plot and y_axis_plot:
             for i, syntaxon_info in enumerate(syntaxons_to_plot_data): 
                 syntaxon_name_for_graph = syntaxon_info.get('name_latin_short', f"Syntaxon {syntaxon_info.get('id', i+1)}")
@@ -533,12 +528,9 @@ if st.session_state.run_main_processing_once and not st.session_state.get('sub',
                 if current_syntaxon_species_list: 
                     species_plot_data_list.append(pd.DataFrame(current_syntaxon_species_list))
         
-        # Combiner toutes les données des espèces
         if species_plot_data_list:
             final_species_df = pd.concat(species_plot_data_list, ignore_index=True)
             plot_data_for_species_jitter = final_species_df.copy()
-
-            # Appliquer le jitter UNIQUEMENT aux points des espèces
             temp_x_col_grp = "_temp_x_species"; temp_y_col_grp = "_temp_y_species"
             plot_data_for_species_jitter[temp_x_col_grp] = plot_data_for_species_jitter[x_axis_plot]
             plot_data_for_species_jitter[temp_y_col_grp] = plot_data_for_species_jitter[y_axis_plot]
@@ -561,11 +553,9 @@ if st.session_state.run_main_processing_once and not st.session_state.get('sub',
                             plot_data_for_species_jitter.loc[idx_jitter_s, x_axis_plot] += jitter_x_val_s * np.cos(angle_s)
                             plot_data_for_species_jitter.loc[idx_jitter_s, y_axis_plot] += jitter_y_val_s * np.sin(angle_s)
             plot_data_for_species_jitter.drop(columns=[temp_x_col_grp, temp_y_col_grp], inplace=True)
-            all_plot_data_list.append(plot_data_for_species_jitter) # Ajouter les espèces (potentiellement jittered)
-
-            # 3. Calculer et préparer les données des centroïdes à partir du DataFrame des espèces NON jittered (final_species_df)
+            all_plot_data_list.append(plot_data_for_species_jitter)
             centroid_data_list = []
-            if x_axis_plot and y_axis_plot: # S'assurer que les axes sont définis
+            if x_axis_plot and y_axis_plot:
                 for group_label_centroid in final_species_df["Groupe_Affichage"].unique():
                     group_data_orig = final_species_df[final_species_df["Groupe_Affichage"] == group_label_centroid]
                     if not group_data_orig.empty:
@@ -575,19 +565,17 @@ if st.session_state.run_main_processing_once and not st.session_state.get('sub',
                             x_axis_plot: mean_x, y_axis_plot: mean_y,
                             'Groupe_Affichage': group_label_centroid,
                             'Nom_Affichage': f"Centroïde {group_label_centroid}",
-                            'Symbole': 'circle-open-dot', # Symbole cible
-                            'marker_size': CENTROID_MARKER_SIZE, # Taille pour les centroïdes
+                            'Symbole': 'circle-cross-open', # Symbole cible modifié
+                            'marker_size': CENTROID_MARKER_SIZE, 
                             'Source_Donnee': "Centroïde", 
                             'Ecologie': "Centre de gravité du groupe", 
-                            'Source_Habitat': group_label_centroid # Ou une autre désignation
+                            'Source_Habitat': group_label_centroid 
                         })
             if centroid_data_list:
                 all_plot_data_list.append(pd.DataFrame(centroid_data_list))
         
-        # Combiner toutes les données (espèces jittered + centroïdes) pour le graphique final
         if all_plot_data_list:
             plot_data_to_use = pd.concat(all_plot_data_list, ignore_index=True)
-
             if not numeric_traits_plot: st.warning("Aucun trait numérique trouvé.")
             elif not x_axis_plot or not y_axis_plot: st.info("Sélectionnez traits pour Axe X et Y.")
             elif x_axis_plot not in numeric_traits_plot or y_axis_plot not in numeric_traits_plot: st.warning("Traits sélectionnés non valides.")
@@ -598,28 +586,25 @@ if st.session_state.run_main_processing_once and not st.session_state.get('sub',
                                              text="Nom_Affichage", hover_name="Nom_Affichage", 
                                              custom_data=["Nom_Affichage", "Ecologie", "Source_Habitat", "Source_Donnee"], 
                                              template="plotly_dark", height=600, color_discrete_sequence=COLOR_SEQUENCE,
-                                             size_max=CENTROID_MARKER_SIZE + 5) # Permettre une taille max un peu plus grande
-                
+                                             size_max=CENTROID_MARKER_SIZE + 5) 
                 fig_interactive.update_traces(textposition="top center", 
-                                              marker=dict(opacity=0.8, line=dict(width=0.5, color='DarkSlateGrey')), # Ajout d'un léger contour aux marqueurs
+                                              marker=dict(opacity=0.8, line=dict(width=0.5, color='DarkSlateGrey')), 
                                               textfont=dict(size=LABEL_FONT_SIZE_ON_PLOTS), 
                                               hovertemplate=(f"<span style='font-size: {HOVER_SPECIES_FONT_SIZE}px;'><b>%{{customdata[0]}}</b></span><br>Source: %{{customdata[3]}}<br>Habitat/Syntaxon: %{{customdata[2]}}<br><br><span style='font-size: {HOVER_ECOLOGY_TITLE_FONT_SIZE}px;'><i>Écologie:</i></span><br><span style='font-size: {HOVER_ECOLOGY_TEXT_FONT_SIZE}px;'>%{{customdata[1]}}</span><extra></extra>" ))
-                
                 unique_groups_fig = sorted(plot_data_to_use["Groupe_Affichage"].unique())
                 extended_color_sequence_fig = COLOR_SEQUENCE * (len(unique_groups_fig) // len(COLOR_SEQUENCE) + 1)
                 group_color_map_fig = {
                     group_label: extended_color_sequence_fig[i % len(extended_color_sequence_fig)]
                     for i, group_label in enumerate(unique_groups_fig)
                 }
-                for trace in fig_interactive.data: # Assurer la cohérence des couleurs pour les traces principales
+                for trace in fig_interactive.data: 
                     if trace.name in group_color_map_fig:
                         trace.marker.color = group_color_map_fig[trace.name]
-                        if trace.marker.symbol == 'circle-open-dot': # Style spécifique pour centroïdes si besoin
-                            trace.marker.line=dict(color=group_color_map_fig[trace.name], width=2)
+                        # Pour les symboles 'target-like', la couleur de la ligne du marqueur peut aussi prendre la couleur du groupe
+                        if trace.marker.symbol == 'circle-cross-open': 
+                            trace.marker.line.color = group_color_map_fig[trace.name]
+                            trace.marker.line.width = 1.5 # Légèrement plus épais pour la cible
 
-
-                # Dessiner les enveloppes convexes pour les données des espèces UNIQUEMENT (avant ajout des centroïdes)
-                # Utiliser plot_data_for_species_jitter pour les enveloppes
                 if 'plot_data_for_species_jitter' in locals() and not plot_data_for_species_jitter.empty:
                     unique_groups_for_hulls = sorted(plot_data_for_species_jitter["Groupe_Affichage"].unique())
                     for grp_lbl_hull in unique_groups_for_hulls: 
@@ -636,7 +621,6 @@ if st.session_state.run_main_processing_once and not st.session_state.get('sub',
                                                                          mode='lines', name=f'{grp_lbl_hull} Hull', opacity=0.2, 
                                                                          showlegend=False, hoverinfo='skip' ))
                                 except Exception as e_hull: print(f"Erreur Hull {grp_lbl_hull}: {e_hull}")
-                
                 fig_interactive.update_layout(title_text=f"{y_axis_plot} vs. {x_axis_plot}", title_x=0.5, 
                                               xaxis_title=x_axis_plot, yaxis_title=y_axis_plot, 
                                               dragmode='pan', legend_title_text="Groupe" )
