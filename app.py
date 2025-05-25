@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-# import plotly.figure_factory as ff # Retiré car non utilisé après suppression dendrogramme
 import plotly.graph_objects as go
 from scipy.spatial import ConvexHull
 import numpy as np
@@ -100,7 +99,7 @@ div[data-testid="stDataEditor"] td {
 /* Style pour la première ligne du st.data_editor (noms des habitats) */
 div[data-testid="stDataEditor"] .glideDataEditor-body .dvn-scroll-inner > div:first-child > div[data-cell^="[0,"] > div {
     background-color: #22272f !important; 
-    color: #e1e1e1 !important;        
+    color: #e1e1e1 !important;       
     font-weight: bold !important;
 }
 /* Style pour la cellule de la première ligne en mode édition */
@@ -118,8 +117,8 @@ div[data-testid="stDataEditor"] .glideDataEditor-body .dvn-scroll-inner > div:fi
     border-radius: 0.5rem; 
     margin-bottom: 5px; /* Ajout d'un petit espace en bas des boutons de syntaxon */
 }
-/* Style pour surligner les espèces en commun dans le tableau des syntaxons */
-.common-species {
+/* Style pour surligner les espèces en commun dans le tableau des syntaxons (si encore utilisé) */
+.common-species { /* Conservé au cas où, mais la nouvelle présentation par colonnes le rend moins crucial */
     color: red;
     font-weight: bold;
 }
@@ -147,9 +146,9 @@ def load_data(file_path="data_ref.csv"):
         if hasattr(core, "read_reference"):
             data_loaded = core.read_reference(file_path)
             if _core_module_usable and not isinstance(core, MockCoreModule): 
-                 if data_loaded is not None and not data_loaded.empty:
+                if data_loaded is not None and not data_loaded.empty:
                     pass 
-                 elif data_loaded is None or data_loaded.empty:
+                elif data_loaded is None or data_loaded.empty:
                     st.warning(f"core.py réel a retourné des données vides pour '{file_path}'.")
         else:
             st.error("Erreur inattendue: la variable 'core' n'a pas de fonction 'read_reference'.")
@@ -273,17 +272,39 @@ def load_syntaxon_data(file_path="data_villaret.csv"):
         if df.empty:
             st.warning(f"Le fichier des syntaxons '{file_path}' est vide.")
             return []
+        
         processed_syntaxons = []
         for index, row in df.iterrows():
+            # Attendre au moins ID (0), Nom (1). La description (2) et les espèces sont optionnelles.
+            if len(row) < 2: # Si pas assez de colonnes pour ID et Nom
+                continue
+
             syntaxon_id = str(row.iloc[0]).strip()
-            syntaxon_name_latin = str(row.iloc[1]).strip() 
+            syntaxon_name_latin = str(row.iloc[1]).strip()
+            syntaxon_description = "Description non disponible."
+            species_start_index = 2 # Par défaut, les espèces commencent après le Nom si pas de Description
+
+            if len(row) > 2: # Il y a une troisième colonne, supposée être la Description
+                syntaxon_description = str(row.iloc[2]).strip()
+                species_start_index = 3 # Les espèces commencent alors après la Description
+            
             species_in_row_set = set()
-            for species_cell_value in row.iloc[2:]:
-                normalized_species = normalize_species_name(species_cell_value) 
-                if normalized_species: species_in_row_set.add(normalized_species)
-            if syntaxon_id and syntaxon_name_latin and species_in_row_set:
-                processed_syntaxons.append({'id': syntaxon_id, 'name_latin': syntaxon_name_latin, 'species_set': species_in_row_set })
-        if not processed_syntaxons: st.warning(f"Aucun syntaxon valide (avec ID, nom et espèces) n'a été trouvé dans '{file_path}'.")
+            if len(row) > species_start_index: # S'il y a des colonnes pour les espèces
+                for species_cell_value in row.iloc[species_start_index:]:
+                    normalized_species = normalize_species_name(species_cell_value)
+                    if normalized_species:
+                        species_in_row_set.add(normalized_species)
+            
+            if syntaxon_id and syntaxon_name_latin: # ID et Nom sont nécessaires
+                processed_syntaxons.append({
+                    'id': syntaxon_id, 
+                    'name_latin': syntaxon_name_latin, 
+                    'description': syntaxon_description if syntaxon_description else "Description non disponible.",
+                    'species_set': species_in_row_set
+                })
+        
+        if not processed_syntaxons:
+            st.warning(f"Aucun syntaxon (avec ID et Nom) n'a été trouvé dans '{file_path}'.")
         return processed_syntaxons
     except FileNotFoundError:
         st.error(f"ERREUR CRITIQUE: Fichier des syntaxons '{file_path}' non trouvé.")
@@ -648,14 +669,23 @@ if st.session_state.run_main_processing_once and not st.session_state.get('sub',
         for syntaxon in syntaxon_data_list:
             common_species = releve_species_normalized.intersection(syntaxon['species_set'])
             score = len(common_species) 
+            # On inclut le syntaxon même si score = 0 pour potentiellement l'afficher s'il est pertinent autrement,
+            # mais le tri par score le placera plus bas. Ou filtrer ici par score > 0 si on ne veut que ceux avec au moins une espèce commune.
+            # Pour l'instant, on garde ceux avec score > 0 comme avant.
             if score > 0: 
-                syntaxon_matches.append({'id': syntaxon['id'], 'name_latin': syntaxon['name_latin'], 
-                                         'name_latin_short': ' '.join(syntaxon['name_latin'].split()[:3]), 
-                                         'species_set': syntaxon['species_set'], 'common_species_set': common_species, 'score': score})
+                syntaxon_matches.append({
+                    'id': syntaxon['id'], 
+                    'name_latin': syntaxon['name_latin'], 
+                    'name_latin_short': ' '.join(syntaxon['name_latin'].split()[:3]), # Garder le nom court pour le bouton si besoin
+                    'description': syntaxon.get('description', "Description non disponible."), # Ajout de la description
+                    'species_set': syntaxon['species_set'], 
+                    'common_species_set': common_species, 
+                    'score': score
+                })
         sorted_syntaxons = sorted(syntaxon_matches, key=lambda x: (-x['score'], x['name_latin']))
         st.session_state.top_matching_syntaxons = sorted_syntaxons[:5] 
 
-        if not st.session_state.top_matching_syntaxons: st.info("Aucun syntaxon correspondant trouvé.")
+        if not st.session_state.top_matching_syntaxons: st.info("Aucun syntaxon correspondant trouvé (avec au moins une espèce en commun).")
         else:
             st.markdown(f"Cliquez sur un syntaxon pour le sélectionner/désélectionner pour le graphique de l'Étape 2.")
             st.markdown(f"Les **{len(st.session_state.top_matching_syntaxons)} syntaxons les plus probables** sont :")
@@ -664,6 +694,10 @@ if st.session_state.run_main_processing_once and not st.session_state.get('sub',
             st.session_state.selected_syntaxon_ids = [sid for sid in st.session_state.selected_syntaxon_ids if sid in valid_top_syntaxon_ids]
 
             num_syntaxons_to_show = len(st.session_state.top_matching_syntaxons)
+            # Ajuster le nombre de colonnes si moins de 5 syntaxons, pour éviter des colonnes vides trop larges.
+            # Par exemple, max 3 colonnes pour une meilleure lisibilité des tableaux internes.
+            # Ou garder le nombre de syntaxons s'ils sont peu nombreux.
+            # Pour l'instant, on garde la logique de N colonnes pour N syntaxons.
             cols_syntaxon_display = st.columns(num_syntaxons_to_show if num_syntaxons_to_show > 0 else 1)
             
             selection_changed_in_syntaxons = False
@@ -671,7 +705,8 @@ if st.session_state.run_main_processing_once and not st.session_state.get('sub',
                 with cols_syntaxon_display[i % num_syntaxons_to_show if num_syntaxons_to_show > 0 else 0]:
                     is_syntaxon_selected = matched_syntaxon['id'] in st.session_state.selected_syntaxon_ids
                     button_syntaxon_type = "primary" if is_syntaxon_selected else "secondary"
-                    button_syntaxon_label = f"{matched_syntaxon['name_latin']} ({matched_syntaxon['score']})" # Nom complet pour le bouton
+                    # Utiliser un label de bouton plus concis, par exemple le nom court ou l'ID.
+                    button_syntaxon_label = f"{matched_syntaxon.get('name_latin_short', matched_syntaxon['id'])} ({matched_syntaxon['score']})"
                     
                     st.markdown(f'<div class="syntaxon-select-button">', unsafe_allow_html=True)
                     if st.button(button_syntaxon_label, key=f"syntaxon_select_{matched_syntaxon['id']}", type=button_syntaxon_type, use_container_width=True):
@@ -682,18 +717,48 @@ if st.session_state.run_main_processing_once and not st.session_state.get('sub',
                         selection_changed_in_syntaxons = True
                     st.markdown('</div>', unsafe_allow_html=True)
                     
-                    st.markdown(f"**{matched_syntaxon['id']}**") # ID sans le préfixe "ID:"
+                    # Affichage des informations du syntaxon (ID, Nom, Description)
+                    st.markdown(f"**{matched_syntaxon['id']}**")
+                    st.markdown(f"*{matched_syntaxon['name_latin']}*")
+                    st.caption(matched_syntaxon.get('description', "Description non disponible."))
+
+                    # Calcul des espèces présentes et absentes pour le tableau
+                    present_species_set = matched_syntaxon['common_species_set']
+                    all_syntaxon_species_set = matched_syntaxon['species_set']
+                    absent_species_set = all_syntaxon_species_set.difference(present_species_set)
+
+                    # Affichage des colonnes pour les taxons présents et absents
+                    col_present, col_absent = st.columns(2)
+
+                    with col_present:
+                        st.markdown(f"**{len(present_species_set)} Taxons Présents**")
+                        if present_species_set:
+                            html_present_list = "<ul>"
+                            for species_name_norm in sorted(list(present_species_set)):
+                                species_display_name = species_name_norm.capitalize()
+                                html_present_list += f"<li>{species_display_name}</li>"
+                            html_present_list += "</ul>"
+                            st.markdown(html_present_list, unsafe_allow_html=True)
+                        else:
+                            st.markdown("_(Aucun)_")
                     
-                    html_species_list = "<ul>"
-                    sorted_syntaxon_species = sorted(list(matched_syntaxon['species_set']), key=lambda sp_name: (sp_name not in matched_syntaxon['common_species_set'], sp_name))
-                    for species_name_norm in sorted_syntaxon_species:
-                        species_display_name = species_name_norm.capitalize() 
-                        if species_name_norm in matched_syntaxon['common_species_set']:
-                            html_species_list += f"<li><span class='common-species'>{species_display_name}</span></li>"
-                        else: html_species_list += f"<li>{species_display_name}</li>"
-                    html_species_list += "</ul>"; st.markdown(html_species_list, unsafe_allow_html=True)
-                    st.markdown("---") 
+                    with col_absent:
+                        st.markdown(f"**{len(absent_species_set)} Taxons Absents**")
+                        if absent_species_set:
+                            html_absent_list = "<ul>"
+                            for species_name_norm in sorted(list(absent_species_set)):
+                                species_display_name = species_name_norm.capitalize()
+                                html_absent_list += f"<li>{species_display_name}</li>"
+                            html_absent_list += "</ul>"
+                            st.markdown(html_absent_list, unsafe_allow_html=True)
+                        else:
+                            st.markdown("_(Aucun)_")
+                    
+                    if num_syntaxons_to_show > 1 and i < num_syntaxons_to_show -1 : # Eviter double separateur si une seule colonne
+                         st.markdown("---") # Séparateur horizontal entre les fiches de syntaxons si plusieurs colonnes
+            
             if selection_changed_in_syntaxons: st.rerun()
+
 elif st.session_state.run_main_processing_once and not syntaxon_data_list:
     st.markdown("---"); st.subheader("Étape 3: Identification et Sélection des Syntaxons Pertinents")
     st.warning("Données des syntaxons non chargées/vides. Identification impossible.")
