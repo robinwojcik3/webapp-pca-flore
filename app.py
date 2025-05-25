@@ -7,6 +7,7 @@ import numpy as np
 import textwrap # Importé pour la mise en forme du texte de survol
 from collections import defaultdict # Ajouté pour l'analyse de co-occurrence
 import re # Ajouté pour parser les comptes dans les chaînes de caractères
+from sklearn.preprocessing import StandardScaler # Ajouté pour le calcul de la contribution à la variance
 
 # Définition de MockCoreModule au niveau supérieur pour qu'elle soit toujours accessible
 class MockCoreModule:
@@ -436,10 +437,8 @@ if st.session_state.selected_habitats_indices and not ref.empty and not st.sessi
                     match_in_ref = ref_binom_series[ref_binom_series == binom_species_name]
                     if not match_in_ref.empty: 
                         ref_idx = match_in_ref.index[0]
-                        # Utiliser le DataFrame 'ref' qui a la colonne potentiellement renommée
                         trait_data = ref.loc[ref_idx].to_dict() 
                         trait_data['Source_Habitat'] = habitat_name
-                        # 'Espece_Ref_Original' doit venir du 'ref' original non modifié si 'Espece' a été altéré
                         trait_data['Espece_Ref_Original'] = ref_original.loc[ref_idx, 'Espece']
                         trait_data['Espece_User_Input_Raw'] = raw_species_name 
                         normalized_ref_for_eco = normalize_species_name(trait_data['Espece_Ref_Original'])
@@ -463,33 +462,87 @@ if st.session_state.selected_habitats_indices and not ref.empty and not st.sessi
         else:
             try:
                 if ref.empty: st.error("DataFrame 'ref' vide."); st.session_state.run_main_processing_once = False; st.session_state.processing_has_run_for_current_selection = False; raise ValueError("DataFrame 'ref' vide.")
-                # Utiliser le DataFrame 'ref' qui a la colonne potentiellement renommée pour identifier les traits numériques
-                numeric_trait_names_from_ref = ref.select_dtypes(include=np.number).columns.tolist()
                 
-                # Assurer que 'Espece' n'est pas dans les traits numériques (même si cela ne devrait pas arriver avec select_dtypes)
-                if 'Espece' in numeric_trait_names_from_ref:
+                numeric_trait_names_from_ref = ref.select_dtypes(include=np.number).columns.tolist()
+                if 'Espece' in numeric_trait_names_from_ref: # Should not happen with select_dtypes(include=np.number)
                     numeric_trait_names_from_ref.remove('Espece')
 
-                actual_numeric_traits = [trait for trait in numeric_trait_names_from_ref if trait in st.session_state.sub.columns]
+                actual_numeric_traits = [trait for trait in numeric_trait_names_from_ref if trait in st.session_state.sub.columns and pd.to_numeric(st.session_state.sub[trait], errors='coerce').notna().any()]
                 
                 if not actual_numeric_traits:
-                    st.error("Aucun trait numérique disponible pour l'analyse (après prise en compte de 'Perturbation CC')."); 
+                    st.error("Aucun trait numérique avec des données valides disponible pour l'analyse."); 
                     st.session_state.run_main_processing_once = False; 
                     st.session_state.processing_has_run_for_current_selection = False; 
-                    raise ValueError("Aucun trait numérique.")
+                    raise ValueError("Aucun trait numérique valide.")
                 else:
                     st.session_state.numeric_trait_names_for_interactive_plot = actual_numeric_traits
-                    exploration_df_data = [{"Variable": trait_name, "Axe X": False, "Axe Y": False} for trait_name in actual_numeric_traits]
+                    
+                    # Calcul de la contribution à la variance
+                    traits_for_variance_analysis = st.session_state.sub[actual_numeric_traits].copy()
+                    # Convertir en numérique et imputer les NaNs pour le scaling/variance
+                    for col in actual_numeric_traits:
+                        traits_for_variance_analysis[col] = pd.to_numeric(traits_for_variance_analysis[col], errors='coerce')
+                    traits_for_variance_analysis = traits_for_variance_analysis.fillna(traits_for_variance_analysis.mean()) # Imputation simple par la moyenne
+
+                    trait_contributions = []
+                    if not traits_for_variance_analysis.empty and traits_for_variance_analysis.shape[1] > 0:
+                        # S'assurer qu'il reste des colonnes après le dropna potentiel ou si une colonne est entièrement NaN avant imputation
+                        valid_cols_for_scaling = traits_for_variance_analysis.dropna(axis=1, how='all').columns
+                        if not valid_cols_for_scaling.empty :
+                            scaler = StandardScaler()
+                            scaled_traits = scaler.fit_transform(traits_for_variance_analysis[valid_cols_for_scaling])
+                            scaled_traits_df = pd.DataFrame(scaled_traits, columns=valid_cols_for_scaling)
+                            variances = scaled_traits_df.var()
+                            total_variance = variances.sum()
+                            if total_variance > 0:
+                                for trait in actual_numeric_traits:
+                                    if trait in variances:
+                                        contribution = (variances[trait] / total_variance) * 100
+                                        trait_contributions.append({"Variable": trait, "Contribution (%)": contribution})
+                                    else: # Trait initialement numérique mais devenu NaN partout ou non inclus dans valid_cols_for_scaling
+                                        trait_contributions.append({"Variable": trait, "Contribution (%)": 0.0})
+
+                            else: # total_variance est 0 (e.g. toutes les valeurs sont constantes après scaling)
+                                equal_contribution = 100.0 / len(actual_numeric_traits) if len(actual_numeric_traits) > 0 else 0
+                                for trait in actual_numeric_traits:
+                                    trait_contributions.append({"Variable": trait, "Contribution (%)": equal_contribution})
+                        else: # Aucune colonne valide pour le scaling
+                             for trait in actual_numeric_traits: trait_contributions.append({"Variable": trait, "Contribution (%)": 0.0})
+                    else: # Pas de données pour l'analyse de variance
+                        for trait in actual_numeric_traits: trait_contributions.append({"Variable": trait, "Contribution (%)": 0.0})
+
+
+                    # Trier par contribution pour la sélection par défaut
+                    trait_contributions_sorted = sorted(trait_contributions, key=lambda x: x["Contribution (%)"], reverse=True)
+                    
+                    exploration_df_data = []
+                    for item in trait_contributions_sorted:
+                        exploration_df_data.append({
+                            "Variable": item["Variable"], 
+                            "Contribution (%)": item["Contribution (%)"], 
+                            "Axe X": False, 
+                            "Axe Y": False
+                        })
+                    
                     st.session_state.trait_exploration_df = pd.DataFrame(exploration_df_data)
+
                     default_x_init, default_y_init = None, None
-                    if actual_numeric_traits:
-                        default_x_init = actual_numeric_traits[0]
-                        default_y_init = actual_numeric_traits[1] if len(actual_numeric_traits) >= 2 else actual_numeric_traits[0]
-                    st.session_state.x_axis_trait_interactive = default_x_init; st.session_state.y_axis_trait_interactive = default_y_init
+                    if len(trait_contributions_sorted) > 0:
+                        default_x_init = trait_contributions_sorted[0]["Variable"]
+                    if len(trait_contributions_sorted) > 1:
+                        default_y_init = trait_contributions_sorted[1]["Variable"]
+                    elif default_x_init: # Si un seul trait, utiliser le même pour Y
+                        default_y_init = default_x_init
+                    
+                    st.session_state.x_axis_trait_interactive = default_x_init
+                    st.session_state.y_axis_trait_interactive = default_y_init
+
                     if not st.session_state.trait_exploration_df.empty:
                         st.session_state.trait_exploration_df["Axe X"] = (st.session_state.trait_exploration_df["Variable"] == default_x_init)
                         st.session_state.trait_exploration_df["Axe Y"] = (st.session_state.trait_exploration_df["Variable"] == default_y_init)
+                    
                     st.session_state.trait_exploration_df_snapshot = st.session_state.trait_exploration_df.copy()
+
             except Exception as e: st.error(f"Erreur traitement: {e}"); st.exception(e); st.session_state.run_main_processing_once = False; st.session_state.processing_has_run_for_current_selection = False;
 elif not st.session_state.selected_habitats_indices and not ref.empty: st.info("Sélectionnez habitat(s) à l'Étape 1.")
 elif ref.empty: st.warning("Données de référence non chargées/simulées. Traitement désactivé si données réelles manquantes.")
@@ -505,11 +558,23 @@ if st.session_state.run_main_processing_once and not st.session_state.get('sub',
         df_editor_source_interactive = st.session_state.get('trait_exploration_df', pd.DataFrame())
         if not df_editor_source_interactive.empty:
             if 'trait_exploration_df_snapshot' not in st.session_state or \
-               list(st.session_state.get('trait_exploration_df_snapshot', pd.DataFrame()).columns) != list(df_editor_source_interactive.columns):
+               list(st.session_state.get('trait_exploration_df_snapshot', pd.DataFrame()).columns) != list(df_editor_source_interactive.columns) or \
+               not st.session_state.trait_exploration_df_snapshot.equals(df_editor_source_interactive) : # Pour s'assurer que le snapshot est à jour avec les contributions
                 st.session_state.trait_exploration_df_snapshot = df_editor_source_interactive.copy()
-            edited_df_interactive = st.data_editor(df_editor_source_interactive, 
-                column_config={"Variable": st.column_config.TextColumn("Trait disponible", disabled=True), "Axe X": st.column_config.CheckboxColumn("Axe X"), "Axe Y": st.column_config.CheckboxColumn("Axe Y") }, 
-                key="interactive_trait_exploration_editor", use_container_width=True, hide_index=True, num_rows="fixed" )
+
+            edited_df_interactive = st.data_editor(
+                df_editor_source_interactive, 
+                column_config={
+                    "Variable": st.column_config.TextColumn("Trait disponible", disabled=True), 
+                    "Contribution (%)": st.column_config.NumberColumn("Contribution (%)", format="%.2f%%", disabled=True),
+                    "Axe X": st.column_config.CheckboxColumn("Axe X"), 
+                    "Axe Y": st.column_config.CheckboxColumn("Axe Y")
+                }, 
+                key="interactive_trait_exploration_editor", 
+                use_container_width=True, 
+                hide_index=True, 
+                num_rows="fixed"
+            )
             made_change_in_interactive_axes = False 
             current_x_selection_from_state = st.session_state.x_axis_trait_interactive
             x_vars_checked_in_editor = edited_df_interactive[edited_df_interactive["Axe X"]]["Variable"].tolist()
@@ -522,6 +587,7 @@ if st.session_state.run_main_processing_once and not st.session_state.get('sub',
                 potential_new_x = [v for v in x_vars_checked_in_editor if v != current_x_selection_from_state]
                 new_x_selection_candidate = potential_new_x[0] if potential_new_x else x_vars_checked_in_editor[-1]; made_change_in_interactive_axes = True
             st.session_state.x_axis_trait_interactive = new_x_selection_candidate
+            
             current_y_selection_from_state = st.session_state.y_axis_trait_interactive
             y_vars_checked_in_editor = edited_df_interactive[edited_df_interactive["Axe Y"]]["Variable"].tolist()
             new_y_selection_candidate = current_y_selection_from_state 
@@ -533,13 +599,14 @@ if st.session_state.run_main_processing_once and not st.session_state.get('sub',
                 potential_new_y = [v for v in y_vars_checked_in_editor if v != current_y_selection_from_state]
                 new_y_selection_candidate = potential_new_y[0] if potential_new_y else y_vars_checked_in_editor[-1]; made_change_in_interactive_axes = True
             st.session_state.y_axis_trait_interactive = new_y_selection_candidate
+            
             if made_change_in_interactive_axes:
-                df_updated_for_editor = df_editor_source_interactive.copy() 
+                df_updated_for_editor = df_editor_source_interactive.copy() # Utiliser la version avec les contributions déjà calculées
                 df_updated_for_editor["Axe X"] = (df_updated_for_editor["Variable"] == st.session_state.x_axis_trait_interactive)
                 df_updated_for_editor["Axe Y"] = (df_updated_for_editor["Variable"] == st.session_state.y_axis_trait_interactive)
                 st.session_state.trait_exploration_df = df_updated_for_editor 
                 st.session_state.trait_exploration_df_snapshot = df_updated_for_editor.copy(); st.rerun() 
-            elif not edited_df_interactive.equals(st.session_state.trait_exploration_df_snapshot):
+            elif not edited_df_interactive.equals(st.session_state.trait_exploration_df_snapshot): # Gérer les changements manuels qui ne sont pas une sélection unique
                    st.session_state.trait_exploration_df_snapshot = edited_df_interactive.copy() 
         else: st.info("Tableau de sélection des traits disponible après traitement si traits numériques identifiés.")
     with col_interactive_graph: 
@@ -557,9 +624,7 @@ if st.session_state.run_main_processing_once and not st.session_state.get('sub',
            x_axis_plot in sub_plot_releve.columns and y_axis_plot in sub_plot_releve.columns:
             required_cols_releve = ['Espece_User_Input_Raw', 'Ecologie', 'Source_Habitat']
             if all(col in sub_plot_releve.columns for col in required_cols_releve):
-                # S'assurer que les colonnes des axes sont bien présentes dans sub_plot_releve
                 cols_for_releve_plot = [x_axis_plot, y_axis_plot] + required_cols_releve
-                # Vérifier que toutes les colonnes nécessaires existent réellement dans sub_plot_releve
                 if all(col in sub_plot_releve.columns for col in cols_for_releve_plot):
                     releve_plot_df_species = sub_plot_releve[cols_for_releve_plot].copy()
                     releve_plot_df_species['Source_Donnee'] = 'Relevé Utilisateur'
@@ -577,26 +642,23 @@ if st.session_state.run_main_processing_once and not st.session_state.get('sub',
                 syntaxon_name_for_graph = syntaxon_info.get('name_latin_short', f"Syntaxon {syntaxon_info.get('id', i+1)}")
                 current_syntaxon_species_list = []
                 for species_norm in syntaxon_info.get('species_set', []):
-                    match_in_ref = ref[ref_binom_series == species_norm] # Utiliser 'ref' (potentiellement avec 'Perturbation CC')
+                    match_in_ref = ref[ref_binom_series == species_norm] 
                     if not match_in_ref.empty:
                         ref_idx = match_in_ref.index[0]; 
-                        trait_data_syntaxon_sp = ref.loc[ref_idx].to_dict() # Traits depuis 'ref'
+                        trait_data_syntaxon_sp = ref.loc[ref_idx].to_dict() 
                         
-                        # S'assurer que les traits des axes X et Y existent pour cette espèce du syntaxon
                         if x_axis_plot in trait_data_syntaxon_sp and y_axis_plot in trait_data_syntaxon_sp:
                             eco_desc_raw = ecology_df.loc[species_norm, 'Description_Ecologie'] if not ecology_df.empty and species_norm in ecology_df.index else None
-                            
-                            # Espece_Ref_Original pour l'affichage, depuis ref_original pour garantir le nom original
                             espece_original_name_for_display = ref_original.loc[ref_idx, 'Espece'] if ref_idx in ref_original.index else species_norm.capitalize()
 
                             current_syntaxon_species_list.append({
                                 x_axis_plot: trait_data_syntaxon_sp[x_axis_plot], 
                                 y_axis_plot: trait_data_syntaxon_sp[y_axis_plot],
-                                'Espece_User_Input_Raw': espece_original_name_for_display, # Nom original pour affichage
+                                'Espece_User_Input_Raw': espece_original_name_for_display, 
                                 'Ecologie': format_ecology_for_hover(eco_desc_raw),
                                 'Source_Habitat': syntaxon_name_for_graph, 
                                 'Source_Donnee': f"Syntaxon: {syntaxon_name_for_graph}",
-                                'Nom_Affichage': espece_original_name_for_display, # Nom original pour affichage
+                                'Nom_Affichage': espece_original_name_for_display, 
                                 'Groupe_Affichage': f"Syntaxon: {syntaxon_name_for_graph}",
                                 'Symbole': 'triangle-up', 
                                 'marker_size': SPECIES_MARKER_SIZE 
@@ -605,7 +667,7 @@ if st.session_state.run_main_processing_once and not st.session_state.get('sub',
                     species_plot_data_list.append(pd.DataFrame(current_syntaxon_species_list))
         
         if species_plot_data_list:
-            final_species_df = pd.concat(species_plot_data_list, ignore_index=True).dropna(subset=[x_axis_plot, y_axis_plot]) # Drop rows where x or y is NaN for plotting
+            final_species_df = pd.concat(species_plot_data_list, ignore_index=True).dropna(subset=[x_axis_plot, y_axis_plot]) 
             
             if not final_species_df.empty:
                 plot_data_for_species_jitter = final_species_df.copy()
@@ -638,13 +700,12 @@ if st.session_state.run_main_processing_once and not st.session_state.get('sub',
                 
                 centroid_data_list = []
                 if x_axis_plot and y_axis_plot:
-                    # Utiliser final_species_df pour les centroides pour ne pas prendre en compte le jitter
                     for group_label_centroid in final_species_df["Groupe_Affichage"].unique():
                         group_data_orig = final_species_df[final_species_df["Groupe_Affichage"] == group_label_centroid]
                         if not group_data_orig.empty and x_axis_plot in group_data_orig.columns and y_axis_plot in group_data_orig.columns:
                             mean_x = group_data_orig[x_axis_plot].mean()
                             mean_y = group_data_orig[y_axis_plot].mean()
-                            if pd.notna(mean_x) and pd.notna(mean_y): # S'assurer que les moyennes ne sont pas NaN
+                            if pd.notna(mean_x) and pd.notna(mean_y): 
                                 centroid_data_list.append({
                                     x_axis_plot: mean_x, y_axis_plot: mean_y,
                                     'Groupe_Affichage': group_label_centroid,
@@ -657,14 +718,13 @@ if st.session_state.run_main_processing_once and not st.session_state.get('sub',
                                 })
                 if centroid_data_list:
                     all_plot_data_list.append(pd.DataFrame(centroid_data_list))
-            else: # final_species_df is empty after dropna
+            else: 
                  st.info("Aucune donnée d'espèce valide à afficher sur le graphique après suppression des valeurs manquantes pour les axes sélectionnés.")
 
 
         if all_plot_data_list:
             plot_data_to_use = pd.concat(all_plot_data_list, ignore_index=True)
             if not plot_data_to_use.empty and x_axis_plot in plot_data_to_use.columns and y_axis_plot in plot_data_to_use.columns:
-                # Définir la palette de couleurs pour les groupes AVANT de créer le graphique
                 unique_groups_fig = sorted(plot_data_to_use["Groupe_Affichage"].unique())
                 extended_color_sequence_fig = COLOR_SEQUENCE * (len(unique_groups_fig) // len(COLOR_SEQUENCE) + 1)
                 group_color_map_fig = {
@@ -692,13 +752,11 @@ if st.session_state.run_main_processing_once and not st.session_state.get('sub',
                             trace.marker.line.color = group_color_map_fig[trace.name] 
                             trace.marker.line.width = 2 
 
-                # Utiliser plot_data_for_species_jitter pour les enveloppes convexes
                 if 'plot_data_for_species_jitter' in locals() and not plot_data_for_species_jitter.empty:
                     unique_groups_for_hulls = sorted(plot_data_for_species_jitter["Groupe_Affichage"].unique())
                     for grp_lbl_hull in unique_groups_for_hulls: 
                         grp_df_hull = plot_data_for_species_jitter[plot_data_for_species_jitter["Groupe_Affichage"] == grp_lbl_hull]
                         if x_axis_plot in grp_df_hull and y_axis_plot in grp_df_hull:
-                            # S'assurer que les données pour l'enveloppe sont numériques et sans NaN
                             hull_pts_raw = grp_df_hull[[x_axis_plot, y_axis_plot]].dropna().drop_duplicates()
                             if not hull_pts_raw.empty:
                                 hull_pts = hull_pts_raw.values
