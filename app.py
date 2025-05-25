@@ -117,11 +117,13 @@ div[data-testid="stDataEditor"] .glideDataEditor-body .dvn-scroll-inner > div:fi
     border-radius: 0.5rem; 
     margin-bottom: 5px; /* Ajout d'un petit espace en bas des boutons de syntaxon */
 }
-/* Style pour surligner les espèces en commun dans le tableau des syntaxons (si encore utilisé) */
-.common-species { /* Conservé au cas où, mais la nouvelle présentation par colonnes le rend moins crucial */
-    color: red;
-    font-weight: bold;
+
+/* Style pour les lignes verticales entre les colonnes de syntaxons à l'Étape 3 */
+#syntaxon-display-area div[data-testid="stHorizontalBlock"] > div:not(:last-child) {
+    border-right: 2px solid red;
+    padding-right: 1rem; /* Espace pour la ligne et avant le contenu suivant */
 }
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -275,27 +277,35 @@ def load_syntaxon_data(file_path="data_villaret.csv"):
         
         processed_syntaxons = []
         for index, row in df.iterrows():
-            # Attendre au moins ID (0), Nom (1). La description (2) et les espèces sont optionnelles.
-            if len(row) < 2: # Si pas assez de colonnes pour ID et Nom
+            if len(row) < 2: 
                 continue
 
             syntaxon_id = str(row.iloc[0]).strip()
             syntaxon_name_latin = str(row.iloc[1]).strip()
             syntaxon_description = "Description non disponible."
-            species_start_index = 2 # Par défaut, les espèces commencent après le Nom si pas de Description
+            species_start_index = 2 
 
-            if len(row) > 2: # Il y a une troisième colonne, supposée être la Description
-                syntaxon_description = str(row.iloc[2]).strip()
-                species_start_index = 3 # Les espèces commencent alors après la Description
-            
+            if len(row) > 2: 
+                description_candidate = str(row.iloc[2]).strip()
+                # Heuristique simple : si la 3ème colonne ne ressemble pas à un nom d'espèce (ex: contient plus de 2 mots)
+                # ou si elle est significativement plus longue, on la considère comme description.
+                # Ceci est une simplification. Une structure de fichier plus explicite serait mieux.
+                if len(description_candidate.split()) > 3 or len(description_candidate) > 50 : # Seuil arbitraire
+                    syntaxon_description = description_candidate
+                    species_start_index = 3
+                elif not any(char.isdigit() for char in description_candidate) and normalize_species_name(description_candidate) is None : # Pas un nom d'espèce typique
+                    syntaxon_description = description_candidate
+                    species_start_index = 3
+
+
             species_in_row_set = set()
-            if len(row) > species_start_index: # S'il y a des colonnes pour les espèces
+            if len(row) > species_start_index: 
                 for species_cell_value in row.iloc[species_start_index:]:
                     normalized_species = normalize_species_name(species_cell_value)
                     if normalized_species:
                         species_in_row_set.add(normalized_species)
             
-            if syntaxon_id and syntaxon_name_latin: # ID et Nom sont nécessaires
+            if syntaxon_id and syntaxon_name_latin: 
                 processed_syntaxons.append({
                     'id': syntaxon_id, 
                     'name_latin': syntaxon_name_latin, 
@@ -662,6 +672,10 @@ elif st.session_state.run_main_processing_once and st.session_state.get('sub', p
 # ---------------------------------------------------------------------------- #
 if st.session_state.run_main_processing_once and not st.session_state.get('sub', pd.DataFrame()).empty and syntaxon_data_list:
     st.markdown("---"); st.subheader("Étape 3: Identification et Sélection des Syntaxons Pertinents")
+    
+    # Wrapper div for applying specific CSS to this section for vertical lines
+    st.markdown('<div id="syntaxon-display-area">', unsafe_allow_html=True)
+
     releve_species_normalized = set(normalize_species_name(sp) for sp in st.session_state.sub['Espece_Ref_Original'].unique()); releve_species_normalized.discard(None) 
     if not releve_species_normalized: st.warning("Aucune espèce normalisée issue des relevés pour comparaison.")
     else:
@@ -669,15 +683,12 @@ if st.session_state.run_main_processing_once and not st.session_state.get('sub',
         for syntaxon in syntaxon_data_list:
             common_species = releve_species_normalized.intersection(syntaxon['species_set'])
             score = len(common_species) 
-            # On inclut le syntaxon même si score = 0 pour potentiellement l'afficher s'il est pertinent autrement,
-            # mais le tri par score le placera plus bas. Ou filtrer ici par score > 0 si on ne veut que ceux avec au moins une espèce commune.
-            # Pour l'instant, on garde ceux avec score > 0 comme avant.
             if score > 0: 
                 syntaxon_matches.append({
                     'id': syntaxon['id'], 
                     'name_latin': syntaxon['name_latin'], 
-                    'name_latin_short': ' '.join(syntaxon['name_latin'].split()[:3]), # Garder le nom court pour le bouton si besoin
-                    'description': syntaxon.get('description', "Description non disponible."), # Ajout de la description
+                    'name_latin_short': ' '.join(syntaxon['name_latin'].split()[:3]), 
+                    'description': syntaxon.get('description', "Description non disponible."), 
                     'species_set': syntaxon['species_set'], 
                     'common_species_set': common_species, 
                     'score': score
@@ -694,10 +705,6 @@ if st.session_state.run_main_processing_once and not st.session_state.get('sub',
             st.session_state.selected_syntaxon_ids = [sid for sid in st.session_state.selected_syntaxon_ids if sid in valid_top_syntaxon_ids]
 
             num_syntaxons_to_show = len(st.session_state.top_matching_syntaxons)
-            # Ajuster le nombre de colonnes si moins de 5 syntaxons, pour éviter des colonnes vides trop larges.
-            # Par exemple, max 3 colonnes pour une meilleure lisibilité des tableaux internes.
-            # Ou garder le nombre de syntaxons s'ils sont peu nombreux.
-            # Pour l'instant, on garde la logique de N colonnes pour N syntaxons.
             cols_syntaxon_display = st.columns(num_syntaxons_to_show if num_syntaxons_to_show > 0 else 1)
             
             selection_changed_in_syntaxons = False
@@ -705,7 +712,6 @@ if st.session_state.run_main_processing_once and not st.session_state.get('sub',
                 with cols_syntaxon_display[i % num_syntaxons_to_show if num_syntaxons_to_show > 0 else 0]:
                     is_syntaxon_selected = matched_syntaxon['id'] in st.session_state.selected_syntaxon_ids
                     button_syntaxon_type = "primary" if is_syntaxon_selected else "secondary"
-                    # Utiliser un label de bouton plus concis, par exemple le nom court ou l'ID.
                     button_syntaxon_label = f"{matched_syntaxon.get('name_latin_short', matched_syntaxon['id'])} ({matched_syntaxon['score']})"
                     
                     st.markdown(f'<div class="syntaxon-select-button">', unsafe_allow_html=True)
@@ -717,17 +723,14 @@ if st.session_state.run_main_processing_once and not st.session_state.get('sub',
                         selection_changed_in_syntaxons = True
                     st.markdown('</div>', unsafe_allow_html=True)
                     
-                    # Affichage des informations du syntaxon (ID, Nom, Description)
                     st.markdown(f"**{matched_syntaxon['id']}**")
                     st.markdown(f"*{matched_syntaxon['name_latin']}*")
                     st.caption(matched_syntaxon.get('description', "Description non disponible."))
 
-                    # Calcul des espèces présentes et absentes pour le tableau
                     present_species_set = matched_syntaxon['common_species_set']
                     all_syntaxon_species_set = matched_syntaxon['species_set']
                     absent_species_set = all_syntaxon_species_set.difference(present_species_set)
 
-                    # Affichage des colonnes pour les taxons présents et absents
                     col_present, col_absent = st.columns(2)
 
                     with col_present:
@@ -754,10 +757,11 @@ if st.session_state.run_main_processing_once and not st.session_state.get('sub',
                         else:
                             st.markdown("_(Aucun)_")
                     
-                    if num_syntaxons_to_show > 1 and i < num_syntaxons_to_show -1 : # Eviter double separateur si une seule colonne
-                         st.markdown("---") # Séparateur horizontal entre les fiches de syntaxons si plusieurs colonnes
+                    # La ligne horizontale st.markdown("---") a été supprimée ici car les lignes verticales sont gérées par CSS
             
             if selection_changed_in_syntaxons: st.rerun()
+    
+    st.markdown('</div>', unsafe_allow_html=True) # Close syntaxon-display-area
 
 elif st.session_state.run_main_processing_once and not syntaxon_data_list:
     st.markdown("---"); st.subheader("Étape 3: Identification et Sélection des Syntaxons Pertinents")
@@ -827,3 +831,4 @@ if st.session_state.run_main_processing_once and not st.session_state.get('sub',
 elif st.session_state.run_main_processing_once and not syntaxon_data_list:
     st.markdown("---"); st.subheader("Étape 4: Analyse des Co-occurrences d'Espèces")
     st.warning("Données des syntaxons non chargées/vides. Analyse de co-occurrence impossible.")
+
